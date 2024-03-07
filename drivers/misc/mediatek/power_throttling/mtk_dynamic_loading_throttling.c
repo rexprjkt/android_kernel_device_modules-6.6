@@ -416,10 +416,11 @@ static int dlpt_notify_handler(void *unused)
 
 		wait_event_interruptible(dlpt.notify_waiter,
 					 (dlpt.notify_flag == true));
-		__pm_stay_awake(dlpt.notify_ws);
 		mutex_lock(&dlpt.notify_lock);
 		if (dlpt.suspend_flag)
 			goto bypass;
+
+		__pm_stay_awake(dlpt.notify_ws);
 
 		cur_ui_soc = dlpt_get_uisoc();
 
@@ -442,10 +443,11 @@ static int dlpt_notify_handler(void *unused)
 				, cur_ui_soc, IMAX_MAX_VALUE);
 		}
 		pre_ui_soc = cur_ui_soc;
+
+		__pm_relax(dlpt.notify_ws);
 bypass:
 		dlpt.notify_flag = false;
 		mutex_unlock(&dlpt.notify_lock);
-		__pm_relax(dlpt.notify_ws);
 
 		mod_timer(&dlpt.notify_timer, jiffies + dlpt_notify_interval);
 
