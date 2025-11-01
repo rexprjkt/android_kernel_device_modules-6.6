@@ -54,7 +54,6 @@
 
 #include <linux/power_supply.h>
 #include <uapi/linux/sched/types.h>
-#include "../tp_get_lcm_name/tp_get_lcd_name.h"
 
 /*****************************************************************************
 * Private constant and macro definitions using #define
@@ -3836,18 +3835,19 @@ static struct spi_driver fts_ts_driver = {
     .id_table = fts_ts_id,
 };
 int focal_fw_name = 0;
-extern int goodix_focal_panel_name(void);
 static int __init fts_ts_init(void)
 {
 	int ret = 0;
-	if (goodix_focal_panel_name() == 1) {
+	int gpio_a;
+
+	gpio_direction_input(DISP_ID_DET);
+	gpio_a = gpio_get_value(DISP_ID_DET);
+
+	if (!gpio_a) {
 		FTS_INFO("TP is focal 3683G TM");
 		focal_fw_name = 1;
-	} else if (goodix_focal_panel_name() == 2) {
-		FTS_INFO("TP is focal 3683G vixionox");
-		focal_fw_name = 2;
 	} else {
-		FTS_INFO("not match 3683G");
+		FTS_INFO("not ft3683g");
 		return 0;
 	}
 

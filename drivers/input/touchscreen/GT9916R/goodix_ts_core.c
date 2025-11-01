@@ -39,7 +39,6 @@
 
 #include "goodix_ts_core.h"
 //#include "mi_disp_notifier.h"
-#include "../tp_get_lcm_name/tp_get_lcd_name.h"
 
 #define GOODIX_DEFAULT_CFG_NAME	"goodix_cfg_group_m16.cfg"
 #define GOOIDX_INPUT_PHYS		"goodix_ts/input0"
@@ -4341,14 +4340,17 @@ static struct platform_driver goodix_ts_driver = {
 	.id_table = ts_core_ids,
 };
 
-extern int goodix_focal_panel_name(void);
 static int __init goodix_ts_core_init(void)
 {
 	int ret;
+        int gpio_a;
 
-	if(goodix_focal_panel_name() == 0)
+        gpio_direction_input(DISP_ID_DET);
+        gpio_a = gpio_get_value(DISP_ID_DET);
+
+	if(!gpio_a)
 		ts_info("TP is goodix 9916r");
-	else 
+	else
 		return 0;
 
 	ts_info("Core layer init:%s", GOODIX_DRIVER_VERSION);

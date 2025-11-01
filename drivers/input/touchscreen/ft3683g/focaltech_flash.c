@@ -45,7 +45,6 @@
 #define TM_VESION_INFO 0x27
 #define VOIX_VESION_INFO 0x23
 
-extern int goodix_focal_panel_name(void);
 extern int focal_fw_name;
 
 /*****************************************************************************
@@ -1945,24 +1944,23 @@ static int fts_fwupg_get_module_info(struct fts_upgrade *upg)
 static int fts_get_fw_file_via_request_firmware(struct fts_upgrade *upg)
 {
     int ret = 0;
+    int gpio_a;
     const struct firmware *fw = NULL;
     u8 *tmpbuf = NULL;
     char fwname[FILE_NAME_LENGTH] = { 0 };
+
+    gpio_direction_input(DISP_ID_DET);
+    gpio_a = gpio_get_value(DISP_ID_DET);
 
     if (!upg || !upg->ts_data || !upg->ts_data->dev) {
         FTS_ERROR("upg/ts_data/dev is null");
         return -EINVAL;
     }
 
-    if (goodix_focal_panel_name() == 1) {
-        snprintf(fwname, FILE_NAME_LENGTH, "%s%s.bin",
-             FTS_FW_NAME_PREX_WITH_REQUEST,
-             upg->module_info->vendor_name);
-    } else if (goodix_focal_panel_name() == 2) { 
-        snprintf(fwname, FILE_NAME_LENGTH, "%s%s.bin",
-             FTS_FW_NAME_PREX_WITH_REQUEST_VIOX,
-             upg->module_info->vendor_name);
-    }
+    snprintf(fwname, FILE_NAME_LENGTH, "%s%s.bin",
+        FTS_FW_NAME_PREX_WITH_REQUEST,
+        upg->module_info->vendor_name);
+
     ret = request_firmware(&fw, fwname, upg->ts_data->dev);
     if (ret == 0) {
         FTS_INFO("firmware(%s) request successfully", fwname);

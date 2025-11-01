@@ -775,7 +775,6 @@ static const struct proc_ops tp_fw_version_fops = {
 	.proc_read = fts_fw_version_read,
 };
 
-extern int goodix_focal_panel_name(void);
 extern int factory_result;
 int focal_ini_name = 0;
 int fts_factory_test(void)
@@ -791,13 +790,8 @@ int fts_factory_test(void)
         return -EINVAL;
     }
 
-    if (goodix_focal_panel_name() == 1) {
-        FTS_INFO("fwname:%s.\n", fwname_tm);
-        focal_ini_name = 1;
-    } else if (goodix_focal_panel_name() == 2) {
-        FTS_INFO("fwname:%s.\n", fwname_viox);
-        focal_ini_name = 2;
-    }
+    FTS_INFO("fwname:%s.\n", fwname_tm);
+    focal_ini_name = 1;
 
     mutex_lock(&input_dev->mutex);
     fts_irq_disable();
