@@ -134,4 +134,5 @@ config MTK_FAN_THERMAL
 	  This option depends on MTK_PWM which is
 	  MTK pwm driver.
 
+source "$(KCONFIG_EXT_PREFIX)drivers/thermal/xiaomi/Kconfig"
 endif
