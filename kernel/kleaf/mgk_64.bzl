@@ -690,6 +690,7 @@ mgk_64_device_modules = [
     "drivers/power/supply/hl7603.ko",
     "drivers/power/supply/bq25985_charger.ko",
     "drivers/power/supply/pd_single_cp_manager.ko",
+    "drivers/power/xm_power/xm_power.ko",
     "drivers/pwm/pwm-mtk-disp.ko",
     "drivers/regulator/mt6315-regulator.ko",
     "drivers/regulator/mt6316-regulator.ko",

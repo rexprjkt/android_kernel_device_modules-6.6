@@ -42,6 +42,8 @@ obj-y += drivers/pinctrl/mediatek/
 
 obj-y += drivers/power/supply/
 
+obj-y += drivers/power/xm_power/
+
 obj-y += drivers/rtc/
 
 obj-y += drivers/remoteproc/
