@@ -82,6 +82,8 @@ source "$(KCONFIG_EXT_PREFIX)drivers/mmc/host/Kconfig"
 
 source "$(KCONFIG_EXT_PREFIX)drivers/gpu/drm/mediatek/Kconfig"
 
+source "$(KCONFIG_EXT_PREFIX)drivers/input/fingerprint/Kconfig"
+
 # source "$(KCONFIG_EXT_PREFIX)drivers/input/touchscreen/Kconfig"
 
 source "$(KCONFIG_EXT_PREFIX)drivers/input/misc/Kconfig"
@@ -130,6 +132,7 @@ source "$(KCONFIG_EXT_PREFIX)drivers/hypervisor/nebula/Kconfig"
 
 source "$(KCONFIG_EXT_PREFIX)/drivers/video/backlight/Kconfig"
 
+source "$(KCONFIG_EXT_PREFIX)drivers/input/fingerprint/Kconfig"
 
 config FACTORY_BUILD
 	bool "distiguish factory version from dev version"
