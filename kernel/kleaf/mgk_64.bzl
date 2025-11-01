@@ -272,7 +272,7 @@ mgk_64_device_modules = [
     #"drivers/input/touchscreen/k6985v1_64_alpha/tp_y761.ko",
     #"drivers/input/touchscreen/synaptics_dsx_96789/synaptics_touch_96789.ko",
     #"drivers/input/touchscreen/synaptics_dsx_96851/synaptics_touch_96851.ko",
-    #"drivers/input/touchscreen/tui-common.ko",
+    "drivers/input/touchscreen/tui-common.ko",
     "drivers/input/touchscreen/xiaomi_touch/xiaomi_touch_common.ko",
     "drivers/input/misc/aw_haptic/haptic.ko",
     "drivers/input/misc/si_haptic/si_haptic.ko",
