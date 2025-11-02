@@ -275,7 +275,7 @@ mgk_64_device_modules = [
     "drivers/input/touchscreen/tui-common.ko",
     "drivers/input/touchscreen/GT9916R/goodix_core_rodin.ko",
     "drivers/input/touchscreen/ft3683g/focaltech_touch_rodin.ko",
-    "drivers/input/touchscreen/xiaomi_touch/xiaomi_touch_common.ko",
+    "drivers/input/touchscreen/xiaomi_touch/xiaomi_touch_rodin.ko",
     "drivers/input/misc/aw_haptic/haptic.ko",
     "drivers/input/misc/si_haptic/si_haptic.ko",
     "drivers/input/misc/aac_haptic/aac_haptic.ko",
