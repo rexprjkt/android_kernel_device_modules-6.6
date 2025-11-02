@@ -44,6 +44,7 @@
 #define FTS_FW_NAME_PREX_WITH_REQUEST_VIOX           "focaltech_ts_fw_viox"
 #define TM_VESION_INFO 0x27
 #define VOIX_VESION_INFO 0x23
+#define DISP_ID_DET (262 + 123)
 
 extern int focal_fw_name;
 
