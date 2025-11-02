@@ -20,6 +20,7 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/uaccess.h>
+#include <linux/pinctrl/consumer.h>
 
 #include <linux/backlight.h>
 #include <drm/drm_panel.h>
