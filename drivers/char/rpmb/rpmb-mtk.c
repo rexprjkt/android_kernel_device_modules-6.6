@@ -138,7 +138,6 @@ static struct nl_rpmb_send_req nl_rpmb_req;
 
 #define RPMB_NAME "rpmb"
 
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 
 enum ufs_ioctl {

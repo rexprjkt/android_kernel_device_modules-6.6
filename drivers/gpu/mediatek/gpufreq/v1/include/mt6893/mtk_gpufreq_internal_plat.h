@@ -183,9 +183,6 @@
  **************************************************/
 #define VOLT_NORMALIZATION(volt)	\
 	((volt % 625) ? (volt - (volt % 625) + 625) : volt)
-#ifndef MIN
-#define MIN(x, y)	(((x) < (y)) ? (x) : (y))
-#endif
 
 #define GPUOP(khz, vgpu, vsram, post_divider, aging_margin)	\
 	{							\

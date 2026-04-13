@@ -75,15 +75,6 @@ extern "C" {
 	for (i = 0; i < ppm_main_info.cluster_num; i++)
 #define for_each_ppm_clients(i)		for (i = 0; i < NR_PPM_CLIENTS; i++)
 
-/* operation */
-#ifndef MAX
-#define MAX(a, b)		((a) >= (b) ? (a) : (b))
-#endif
-
-#ifndef MIN
-#define MIN(a, b)		((a) >= (b) ? (b) : (a))
-#endif
-
 /* LOCK */
 #define ppm_lock(lock)		mutex_lock(lock)
 #define ppm_unlock(lock)	mutex_unlock(lock)
