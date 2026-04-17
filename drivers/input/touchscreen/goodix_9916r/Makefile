@@ -1,7 +1,7 @@
 ccflags-$(CONFIG_TOUCHSCREEN_MTK_TOUCH) += -I$(DEVICE_MODULES_PATH)/drivers/input/touchscreen/
 ccflags-y += -I$(DEVICE_MODULES_PATH)/drivers/input/touchscreen/xiaomi/
-obj-$(CONFIG_TOUCHSCREEN_GOODIX_BRL_9916) += goodix_core.o
-goodix_core-y :=\
+obj-$(CONFIG_TOUCHSCREEN_GOODIX_BRL_9916) += goodix_core_rodin.o
+goodix_core_rodin-y :=\
 		goodix_brl_spi.o \
 		goodix_ts_core.o \
 		goodix_brl_hw.o \

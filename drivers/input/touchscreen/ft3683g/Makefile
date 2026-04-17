@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0
 ccflags-$(CONFIG_DRM_MEDIATEK_V2) += -I$(srctree)/drivers/gpu/drm/mediatek/mediatek_v2/
 ccflags-$(CONFIG_TOUCHSCREEN_MTK_TOUCH) += -I$(DEVICE_MODULES_PATH)/drivers/input/touchscreen/
-obj-$(CONFIG_TOUCHSCREEN_FOCALTECH_FT3683G) := focaltech_touch.o
+obj-$(CONFIG_TOUCHSCREEN_FOCALTECH_FT3683G) := focaltech_touch_rodin.o
 
-focaltech_touch-y := \
+focaltech_touch_rodin-y := \
 	focaltech_core.o \
 	focaltech_ex_fun.o \
 	focaltech_ex_mode.o \
