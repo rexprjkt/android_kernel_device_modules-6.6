@@ -3906,6 +3906,7 @@ def get_overlay_modules_list():
         mgk_64_device_modules.append("drivers/tee/teei/400/isee.ko")
 
     if "rodin" in DEFCONFIG_OVERLAYS:
+        mgk_64_device_modules.append("drivers/tee/mitee/mitee.ko")
         mgk_64_device_modules.append("drivers/gpu/drm/panel/panel-o10-42-02-0a-dsc-vdo.ko")
         mgk_64_device_modules.append("drivers/gpu/drm/panel/panel-o10-36-02-0b-dsc-vdo.ko")
 
