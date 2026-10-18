@@ -4,3 +4,11 @@ config MITEE_SUPPORT
 	help
 	  This implements the MI-TEE Trusted Execution Environment (TEE)
 	  feature.
+
+config MITEE_SHM_NUM_PRIV_PAGES
+	int "Number of private pages for a MI-TEE shared memory pool"
+	depends on MITEE_SUPPORT
+	default 3
+	help
+	  Number of pages reserved at the start of the MI-TEE shared memory
+	  region that are kept private to the driver.
