@@ -100,13 +100,6 @@ mgk_64_kleaf_modules = [
     "//vendor/mediatek/kernel_modules/mtkcam/img_frm_sync:mtk-img-frm-sync",
     "//vendor/mediatek/kernel_modules/task_turbo_cus:task_turbo_cus",
     "//vendor/mediatek/kernel_modules/task_turbo_int:task_turbo_int",
-    "//vendor/xiaomi/proprietary/touch/touchfeature_v2/touch_driver:touch_driver",
-    "//vendor/xiaomi/proprietary/fingerprint:fingerprint_driver",
-    "//vendor/xiaomi/proprietary/mitee_drv:mitee",
-    "//vendor/xiaomi/proprietary/slm/kmod:kmod",
-    "//vendor/xiaomi/proprietary/miwillp/engine:miwillp",
-    "//vendor/xiaomi/proprietary/minet/driver:minet",
-    "//vendor/xiaomi/proprietary/kernelmodules/hardwareinfo/kernel_module:hardwareinfo",
 ]
 
 mgk_64_kleaf_eng_modules = [
