@@ -216,6 +216,8 @@ struct mtk_spi {
 
 static const struct mtk_spi_compatible mtk_common_compat;
 
+struct mtk_spi *fingerprint_ms;
+
 static const struct mtk_spi_compatible mt2712_compat = {
 	.must_rx = true,
 	.must_tx = true,
