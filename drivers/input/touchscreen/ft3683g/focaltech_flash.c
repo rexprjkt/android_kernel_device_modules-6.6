@@ -43,24 +43,19 @@
 #define FTS_FW_NAME_PREX_WITH_REQUEST_VIOX           "focaltech_ts_fw_viox"
 #define TM_VESION_INFO 0x27
 #define VOIX_VESION_INFO 0x23
-#define DISP_ID_DET (262 + 123)
+#define DISP_ID_DET (512 + 128)
 
 extern int focal_fw_name;
 
 /*****************************************************************************
 * Global variable or extern global variabls/functions
 *****************************************************************************/
-u8 fw_file[] = {
-#include FTS_UPGRADE_FW_FILE
-};
-
-u8 fw_file2[] = {
-#include FTS_UPGRADE_FW2_FILE
-};
-
-u8 fw_file3[] = {
-#include FTS_UPGRADE_FW3_FILE
-};
+/* Stock Rodin has zero-length fw_file, fw_file2 and fw_file3 symbols.
+ * Firmware comes from request_firmware(); no sample image is built in.
+ */
+u8 fw_file[] = {};
+u8 fw_file2[] = {};
+u8 fw_file3[] = {};
 
 struct upgrade_module module_list[] = {
     {FTS_MODULE_ID, FTS_MODULE_NAME, fw_file, sizeof(fw_file)},

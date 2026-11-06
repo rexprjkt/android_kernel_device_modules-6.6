@@ -474,7 +474,8 @@ static int goodix_fw_version_compare(struct fw_update_ctrl *fwu_ctrl)
 			goodix_get_file_config_id(fwu_ctrl->ic_config->data);
 		goodix_reg_read(config_id_reg,
 			(u8 *)&ic_cfg_id, sizeof(ic_cfg_id));
-		if (ic_cfg_id != file_cfg_id) {
+		if (ic_cfg_id != file_cfg_id &&
+		    !goodix_is_self_config_pair(file_cfg_id, ic_cfg_id)) {
 			ts_info("ic_cfg_id:0x%x != file_cfg_id:0x%x",
 				ic_cfg_id, file_cfg_id);
 			return COMPARE_CFG_NOTEQUAL;

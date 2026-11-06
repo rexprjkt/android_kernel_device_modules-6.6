@@ -42,6 +42,7 @@ static void fp_spi_clk_disable(void)
 /*************************************************************/
 static LIST_HEAD(device_list);
 static DEFINE_MUTEX(device_list_lock);
+static DEFINE_MUTEX(fp_state_lock);
 static struct wakeup_source *fp_wakesrc = NULL;
 struct work_struct fp_display_work;
 static struct fp_device fp;
@@ -119,7 +120,10 @@ static irqreturn_t fp_irq(int irq, void *handle)
 #endif
 	FUNC_ENTRY();
 	__pm_wakeup_event(fp_wakesrc, WAKELOCK_HOLD_TIME);
-	netlink_send(fp_dev, FP_NETLINK_IRQ);
+	WRITE_ONCE(fp_dev->poll_have_data, 1);
+	wake_up_interruptible(&fp_dev->wait_queue);
+	if (READ_ONCE(fp_dev->netlink_enabled))
+		netlink_send(fp_dev, FP_NETLINK_IRQ);
 #ifdef XIAOMI_DRM_INTERFACE_WA
         if ((fp_dev->wait_finger_down == true) && (fp_dev->fb_black == 1)) {
                 key_input = KEY_RIGHT;
@@ -139,7 +143,7 @@ static irqreturn_t fp_irq(int irq, void *handle)
 /* file operation function                                              */
 /* -------------------------------------------------------------------- */
 
-static long fp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+static long fp_ioctl_locked(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct fp_device *fp_dev = &fp;
 	struct fp_key fp_key;
@@ -209,18 +213,16 @@ static long fp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (fp_dev->device_available == 1) {
 			pr_debug( "Sensor has already powered-on.\n");
 		} else {
-			fp_power_on(fp_dev);
-			fp_dev->device_available = 1;
+			retval = fp_power_on(fp_dev);
 		}
 		break;
 
 	case FP_IOC_DISABLE_POWER:
 		pr_debug( " FP_IOC_DISABLE_POWER ======\n");
-		if (fp_dev->device_available == 0) {
+		if (!fp_dev->regulator_enabled) {
 			pr_debug( "Sensor has already powered-off.\n");
 		} else {
-			fp_power_off(fp_dev);
-			fp_dev->device_available = 0;
+			retval = fp_power_off(fp_dev);
 		}
 		break;
 
@@ -287,6 +289,17 @@ static long fp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return retval;
 }
 
+static long fp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	long ret = -ENODEV;
+
+	mutex_lock(&fp_state_lock);
+	if (fp.ready && filp->private_data == &fp)
+		ret = fp_ioctl_locked(filp, cmd, arg);
+	mutex_unlock(&fp_state_lock);
+	return ret;
+}
+
 #ifdef CONFIG_COMPAT
 static long fp_compat_ioctl(struct file *filp, unsigned int cmd,
 			    unsigned long arg)
@@ -303,84 +316,81 @@ static long fp_compat_ioctl(struct file *filp, unsigned int cmd,
 /* -------------------------------------------------------------------- */
 static int fp_open(struct inode *inode, struct file *filp)
 {
-	struct fp_device *fp_dev = NULL;
-	int status = -ENXIO;
+	struct fp_device *fp_dev = &fp;
+	int ret = -ENODEV;
 
-	FUNC_ENTRY();
-	mutex_lock(&device_list_lock);
-	list_for_each_entry(fp_dev, &device_list, device_entry) {
-		if (fp_dev->devt == inode->i_rdev) {
-			pr_debug( "  Found\n" );
-			status = 0;
-			break;
-		}
+	mutex_lock(&fp_state_lock);
+	if (!fp_dev->ready || inode->i_rdev != fp_dev->devt)
+		goto out;
+	if (!fp_dev->users) {
+		ret = gpio_direction_input(fp_dev->irq_gpio);
+		if (ret)
+			goto out;
+		ret = request_threaded_irq(fp_dev->irq_num, NULL, fp_irq,
+			IRQF_TRIGGER_RISING | IRQF_ONESHOT, "xiaomi_fp_irq", fp_dev);
+		if (ret)
+			goto out;
+		fp_dev->irq_requested = true;
+		fp_dev->irq_enabled = 1;
+		fp_disable_irq(fp_dev);
 	}
-	mutex_unlock(&device_list_lock);
-
-	if (status == 0) {
-		filp->private_data = fp_dev;
-		nonseekable_open(inode, filp);
-		pr_debug( "Success to open device. irq = %d\n", fp_dev->irq_num);
-		gpio_direction_input(fp_dev->irq_gpio);
-		status = request_threaded_irq(fp_dev->irq_num, NULL, fp_irq,
-					      IRQF_TRIGGER_RISING |
-					      IRQF_ONESHOT, "xiaomi_fp_irq",
-					      fp_dev);
-		if (!status){
-			pr_debug( "irq thread request success!\n");
-			fp_dev->irq_enabled = 1;
-			fp_disable_irq(fp_dev);
-		}
-		else{
-			pr_debug("irq thread request failed, status=%d\n",status);
-		}
-	} else {
-		pr_debug( "  No device for minor %d\n" ,iminor(inode));
-	}
-	FUNC_EXIT();
-	return status;
+	fp_dev->users++;
+	filp->private_data = fp_dev;
+	ret = nonseekable_open(inode, filp);
+out:
+	mutex_unlock(&fp_state_lock);
+	return ret;
 }
 
 static int fp_release(struct inode *inode, struct file *filp)
 {
-	struct fp_device *fp_dev = NULL;
-	int status = 0;
-	FUNC_ENTRY();
-	fp_dev = filp->private_data;
-	if (fp_dev->irq_num){
+	struct fp_device *fp_dev = filp->private_data;
+
+	mutex_lock(&fp_state_lock);
+	if (fp_dev && fp_dev->users && !--fp_dev->users && fp_dev->irq_requested) {
 		fp_disable_irq(fp_dev);
 		free_irq(fp_dev->irq_num, fp_dev);
+		fp_dev->irq_requested = false;
 	}
-	FUNC_EXIT();
-	return status;
+	filp->private_data = NULL;
+	mutex_unlock(&fp_state_lock);
+	return 0;
 }
 
 static unsigned int poll(struct file *filp, poll_table *wait)
 {
-    struct fp_device *fp_dev = &fp;
-    unsigned int mask = 0;
-	FUNC_ENTRY();
-    /*poll wait*/
-    poll_wait(filp, &fp_dev->wait_queue,  wait);
-	if(fp_dev->poll_have_data)
-		mask = POLLERR | POLLPRI;
-    return mask;
+	struct fp_device *fp_dev = filp->private_data;
+	unsigned int mask = POLLHUP;
+
+	mutex_lock(&fp_state_lock);
+	if (fp_dev && fp_dev->ready) {
+		poll_wait(filp, &fp_dev->wait_queue, wait);
+		mask = READ_ONCE(fp_dev->poll_have_data) ? POLLERR | POLLPRI : 0;
+	}
+	mutex_unlock(&fp_state_lock);
+	return mask;
 }
 
 static ssize_t read(struct file *filp, char __user *buf, size_t size, loff_t *ppos)
 {
-	int ret = 0;
-	struct fp_device *fp_dev = &fp;
-	char value=0;
-	FUNC_ENTRY();
-	value=(char)gpio_get_value(fp_dev->irq_gpio)+'0';
-	if(copy_to_user(buf,&value,1)){
-		ret=-EFAULT;
-		pr_debug("mi_read copy_to_user error");
-	}else{
-		ret=1;
-		fp_dev->poll_have_data=0;
+	struct fp_device *fp_dev = filp->private_data;
+	ssize_t ret = -ENODEV;
+	char value;
+
+	if (!size)
+		return 0;
+	mutex_lock(&fp_state_lock);
+	if (!fp_dev || !fp_dev->ready)
+		goto out;
+	value = gpio_get_value(fp_dev->irq_gpio) + '0';
+	if (copy_to_user(buf, &value, 1)) {
+		ret = -EFAULT;
+	} else {
+		WRITE_ONCE(fp_dev->poll_have_data, 0);
+		ret = 1;
 	}
+out:
+	mutex_unlock(&fp_state_lock);
 	return ret;
 }
 
@@ -399,13 +409,18 @@ static const struct file_operations fp_fops = {
 static int fp_probe(struct platform_device *driver_device)
 {
 	struct fp_device *fp_dev = &fp;
-	int status = -EINVAL, ret = 0;
+	int status = -EINVAL;
 	int i;
 	FUNC_ENTRY();
 
 	INIT_LIST_HEAD(&fp_dev->device_entry);
 
 	fp_dev->irq_gpio = -EINVAL;
+	fp_dev->ready = false;
+	fp_dev->irq_requested = false;
+	fp_dev->regulator_enabled = false;
+	fp_dev->users = 0;
+	fp_dev->poll_have_data = 0;
 	fp_dev->device_available = 0;
 	fp_dev->fb_black = 0;
 	fp_dev->wait_finger_down = false;
@@ -422,19 +437,15 @@ static int fp_probe(struct platform_device *driver_device)
 		goto err_dts;
 	}
 
-	fp_power_on(fp_dev);
-	if (!IS_ERR(fp_dev->pins_eint_default)) {
-		pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_eint_default);
-	}
-
-	if (IS_ERR(fp_dev->pins_spiio_spi_mode)) {
-		ret = PTR_ERR(fp_dev->pins_spiio_spi_mode);
-		pr_debug("%s fingerprint pinctrl spiio_spi_mode NULL\n",
-			__func__);
-		return ret;
-	} else {
-		pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_spiio_spi_mode);
-	}
+	status = fp_power_on(fp_dev);
+	if (status)
+		goto err_dts;
+	status = pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_eint_default);
+	if (status)
+		goto err_class;
+	status = pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_spiio_spi_mode);
+	if (status)
+		goto err_class;
 
 	/* create class */
 	fp_dev->class = class_create(FP_CLASS_NAME);
@@ -489,22 +500,29 @@ static int fp_probe(struct platform_device *driver_device)
 		goto err_input_2;
 	}
 	init_waitqueue_head(&fp_dev->wait_queue);
-#ifdef XIAOMI_DRM_INTERFACE_WA
-		/* register screen on/off callback */
-		fp_dev->notifier.notifier_call = fp_fb_notifier_callback;
-		drm_register_client(&fp_dev->notifier);
-#endif
 	/* netlink interface init */
 	status = netlink_init(fp_dev);
-	if (status == -1) {
+	if (status) {
 		input_unregister_device(fp_dev->input);
 		fp_dev->input = NULL;
 		goto err_input;
 	}
 	fp_dev->netlink_enabled = 1;
 	fp_wakesrc = wakeup_source_register(
-		&fp_dev->driver_device->dev,
-			"fp_wakesrc");
+		&fp_dev->driver_device->dev, "fp_wakesrc");
+	if (!fp_wakesrc) {
+		status = -ENOMEM;
+		netlink_destroy(fp_dev);
+		fp_dev->netlink_enabled = 0;
+		input_unregister_device(fp_dev->input);
+		fp_dev->input = NULL;
+		goto err_input;
+	}
+#ifdef XIAOMI_DRM_INTERFACE_WA
+	/* Register only after resources used by the callback are ready. */
+	fp_dev->notifier.notifier_call = fp_fb_notifier_callback;
+	drm_register_client(&fp_dev->notifier);
+#endif
 #ifndef CONFIG_SIDE_FINGERPRINT
 	if (device_may_wakeup(fp_dev->device)) {
 		pr_debug("device_may_wakeup\n");
@@ -515,6 +533,9 @@ static int fp_probe(struct platform_device *driver_device)
 	enable_irq_wake(fp_dev->irq_num);
 	pr_debug("CONFIG_SIDE_FINGERPRINT define, is side fingerprint project\n");
 #endif
+	mutex_lock(&fp_state_lock);
+	fp_dev->ready = true;
+	mutex_unlock(&fp_state_lock);
 	pr_debug( "fp probe success" );
 	FUNC_EXIT();
 	return 0;
@@ -553,44 +574,43 @@ err_dts:
 static int fp_remove(struct platform_device *driver_device)
 {
 	struct fp_device *fp_dev = &fp;
-	FUNC_ENTRY();
-	wakeup_source_unregister(fp_wakesrc);
-	fp_wakesrc = NULL;
-	/* make sure ops on existing fds can abort cleanly */
-	if (fp_dev->irq_num) {
-		free_irq(fp_dev->irq_num, fp_dev);
-		fp_dev->irq_enabled = 0;
-		fp_dev->irq_num = 0;
-	}
 
+	mutex_lock(&fp_state_lock);
+	fp_dev->ready = false;
+	wake_up_interruptible(&fp_dev->wait_queue);
+	if (fp_dev->irq_requested) {
+		fp_disable_irq(fp_dev);
+		free_irq(fp_dev->irq_num, fp_dev);
+		fp_dev->irq_requested = false;
+	}
 #ifdef XIAOMI_DRM_INTERFACE_WA
 	drm_unregister_client(&fp_dev->notifier);
+	cancel_work_sync(&fp_display_work);
 #endif
-
-	if (fp_dev->input != NULL) {
-		input_unregister_device(fp_dev->input);
-		input_free_device(fp_dev->input);
-	}
 	netlink_destroy(fp_dev);
 	fp_dev->netlink_enabled = 0;
+#ifdef CONFIG_FP_MTK_PLATFORM
+	fp_spi_clk_disable();
+#endif
+	wakeup_source_unregister(fp_wakesrc);
+	fp_wakesrc = NULL;
+	if (fp_dev->input) {
+		input_unregister_device(fp_dev->input);
+		fp_dev->input = NULL;
+	}
 	cdev_del(&fp_dev->cdev);
 	device_destroy(fp_dev->class, fp_dev->devt);
-	list_del(&fp_dev->device_entry);
-
+	mutex_lock(&device_list_lock);
+	list_del_init(&fp_dev->device_entry);
+	mutex_unlock(&device_list_lock);
 	unregister_chrdev_region(fp_dev->devt, 1);
 	class_destroy(fp_dev->class);
-	if (!IS_ERR(fp_dev->pins_spiio_spi_mode)) {
-		pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_spiio_gpio_mode);
-	}
-	if (!IS_ERR(fp_dev->pins_reset_low)) {
-		pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_reset_low);
-	}
-	if (!IS_ERR(fp_dev->pins_eint_default)) {
-		pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_eint_default);
-	}
+	pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_spiio_gpio_mode);
+	pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_reset_low);
+	pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_eint_pulldown);
 	fp_power_off(fp_dev);
 	fp_dev->driver_device = NULL;
-	FUNC_EXIT();
+	mutex_unlock(&fp_state_lock);
 	return 0;
 }
 
@@ -606,6 +626,7 @@ static struct platform_driver fp_platform_driver = {
 		   .name = FP_DEV_NAME,
 		   .owner = THIS_MODULE,
 		   .of_match_table = fp_of_match,
+		   .suppress_bind_attrs = true,
 		   },
 	.probe = fp_probe,
 	.remove = fp_remove,

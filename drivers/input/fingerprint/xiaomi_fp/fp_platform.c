@@ -17,127 +17,85 @@
 
 int fp_parse_dts(struct fp_device *fp_dev)
 {
+	struct device *dev = &fp_dev->driver_device->dev;
+	struct device_node *node = dev->of_node;
 	int ret;
-	struct device_node *node = fp_dev->driver_device->dev.of_node;
-	FUNC_ENTRY();
-	if (node) {
-	/*get irq resourece */
-		fp_dev->irq_gpio =of_get_named_gpio(node, DTS_IRQ_GPIO, 0);
-		pr_debug( "fp::irq_gpio:%d\n",fp_dev->irq_gpio);
-		if (!gpio_is_valid(fp_dev->irq_gpio)) {
-			pr_debug("IRQ GPIO is invalid.\n");
-			return -EPERM;
-		}
-		fp_dev->irq_num = gpio_to_irq(fp_dev->irq_gpio);
-		of_property_read_u32(node, DTS_NETLINK_NUM, &fp_dev->netlink_num);
-	} else {
-		pr_debug( "device node is null\n");
-			return -EPERM;
+
+	if (!node)
+		return -ENODEV;
+	fp_dev->irq_gpio = of_get_named_gpio(node, DTS_IRQ_GPIO, 0);
+	if (!gpio_is_valid(fp_dev->irq_gpio))
+		return fp_dev->irq_gpio < 0 ? fp_dev->irq_gpio : -EINVAL;
+	fp_dev->irq_num = gpio_to_irq(fp_dev->irq_gpio);
+	if (fp_dev->irq_num < 0)
+		return fp_dev->irq_num;
+	ret = of_property_read_u32(node, DTS_NETLINK_NUM, &fp_dev->netlink_num);
+	if (ret)
+		return ret;
+	if (!fp_dev->netlink_num || fp_dev->netlink_num >= MAX_LINKS)
+		return -EINVAL;
+
+	fp_dev->vreg = devm_regulator_get(dev, DTS_VOlT_REGULATER);
+	if (IS_ERR(fp_dev->vreg))
+		return PTR_ERR(fp_dev->vreg);
+	fp_dev->pinctrl = devm_pinctrl_get(dev);
+	if (IS_ERR(fp_dev->pinctrl))
+		return PTR_ERR(fp_dev->pinctrl);
+#define FP_LOOKUP_STATE(member, name) do { \
+	fp_dev->member = pinctrl_lookup_state(fp_dev->pinctrl, name); \
+	if (IS_ERR(fp_dev->member)) \
+		return PTR_ERR(fp_dev->member); \
+} while (0)
+	FP_LOOKUP_STATE(pins_spiio_spi_mode, "spiio_spi_mode");
+	FP_LOOKUP_STATE(pins_spiio_gpio_mode, "spiio_gpio_mode");
+	FP_LOOKUP_STATE(pins_reset_high, DTS_PINCTL_RESET_HIGH);
+	FP_LOOKUP_STATE(pins_reset_low, DTS_PINCTL_RESET_LOW);
+	FP_LOOKUP_STATE(pins_eint_default, "eint_default");
+	FP_LOOKUP_STATE(pins_eint_pulldown, "eint_pulldown");
+#undef FP_LOOKUP_STATE
+	/* Stock Rodin holds SPI in GPIO mode until the supply is enabled. */
+	ret = pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_spiio_gpio_mode);
+	if (ret)
+		return ret;
+	ret = pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_reset_low);
+	if (ret)
+		return ret;
+	return pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_eint_pulldown);
+}
+
+int fp_power_on(struct fp_device *fp_dev)
+{
+	int ret;
+
+	if (fp_dev->regulator_enabled) {
+		fp_dev->device_available = 1;
+		return 0;
 	}
-	if (fp_dev->driver_device) {
-		fp_dev->vreg =
-			regulator_get(&fp_dev->driver_device->dev, DTS_VOlT_REGULATER);
-		if (IS_ERR(fp_dev->vreg)) {
-			return -EPERM;
-		}
-		fp_dev->pinctrl = pinctrl_get(&fp_dev->driver_device->dev);
-		if (IS_ERR(fp_dev->pinctrl)) {
-			ret = PTR_ERR(fp_dev->pinctrl);
-			pr_debug("can't find fingerprint pinctrl\n");
-			return ret;
-		}
-		fp_dev->pins_reset_high =
-			pinctrl_lookup_state(fp_dev->pinctrl, DTS_PINCTL_RESET_HIGH);
-		if (IS_ERR(fp_dev->pins_reset_high)) {
-			ret = PTR_ERR(fp_dev->pins_reset_high);
-			pr_debug("can't find  pinctrl reset_high\n");
-			return ret;
-		}
-		fp_dev->pins_reset_low =
-			pinctrl_lookup_state(fp_dev->pinctrl, DTS_PINCTL_RESET_LOW);
-		if (IS_ERR(fp_dev->pins_reset_low)) {
-			ret = PTR_ERR(fp_dev->pins_reset_low);
-			pr_debug("can't find  pinctrl reset_low\n");
-			return ret;
-		} else {
-			pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_reset_low);
-		}
-
-		fp_dev->pins_spiio_spi_mode =
-	    	pinctrl_lookup_state(fp_dev->pinctrl, "spiio_spi_mode");
-		if (IS_ERR(fp_dev->pins_spiio_spi_mode)) {
-			ret = PTR_ERR(fp_dev->pins_spiio_spi_mode);
-			pr_debug("%s can't find fingerprint pinctrl spiio_spi_mode\n",
-				__func__);
-		} else {
-			pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_spiio_spi_mode);
-		}
-
-		fp_dev->pins_spiio_gpio_mode =
-	    	pinctrl_lookup_state(fp_dev->pinctrl, "spiio_gpio_mode");
-		if (IS_ERR(fp_dev->pins_spiio_gpio_mode)) {
-			ret = PTR_ERR(fp_dev->pins_spiio_gpio_mode);
-			pr_debug("%s can't find fingerprint spiio_gpio_mode\n",
-				__func__);
-		}
-
-		fp_dev->pins_eint_default =
-			pinctrl_lookup_state(fp_dev->pinctrl, "eint_default");
-		if (IS_ERR(fp_dev->pins_eint_default)) {
-			ret = PTR_ERR(fp_dev->pins_eint_default);
-			pr_debug("%s can't find fingerprint pinctrl pins_eint_default\n",
-				__func__);
-			return ret;
-		}
-
-		fp_dev->pins_eint_pulldown =
-	    	pinctrl_lookup_state(fp_dev->pinctrl, "eint_pulldown");
-		if (IS_ERR(fp_dev->pins_eint_pulldown)) {
-			ret = PTR_ERR(fp_dev->pins_eint_pulldown);
-			pr_debug("%s can't find fingerprint pinctrl pins_eint_pulldown\n",
-				__func__);
-			return ret;
-		} else {
-			pinctrl_select_state(fp_dev->pinctrl, fp_dev->pins_eint_pulldown);
-		}
-		pr_debug("get pinctrl success!\n");
-	} else {
-		pr_debug( "platform device is null\n");
-		return -EPERM;
-	}
-	FUNC_EXIT();
+	ret = regulator_set_voltage(fp_dev->vreg, 3300000, 3300000);
+	if (ret)
+		return ret;
+	ret = regulator_enable(fp_dev->vreg);
+	if (ret)
+		return ret;
+	fp_dev->regulator_enabled = true;
+	fp_dev->device_available = 1;
 	return 0;
 }
 
-void fp_power_on(struct fp_device *fp_dev)
+int fp_power_off(struct fp_device *fp_dev)
 {
-	int status=0;
-	FUNC_ENTRY();
-	if(fp_dev->device_available == 1){
-		pr_err("have already powered on\n");
-	}else{
-#ifdef CONFIG_FP_MTK_PLATFORM
-		status = regulator_set_voltage(fp_dev->vreg, 3300000, 3300000);
-#endif
-		status = regulator_enable(fp_dev->vreg);
-		status = regulator_get_voltage(fp_dev->vreg);
-		pr_debug( "power on regulator_value %d!!\n",status);
-		fp_dev->device_available = 1;
-	}
-}
+	int ret;
 
-void fp_power_off(struct fp_device *fp_dev)
-{
-	int status=0;
-	FUNC_ENTRY();
-	if(fp_dev->device_available == 0){
-		pr_err("has already powered off\n");
-	}else{
-		status = regulator_disable(fp_dev->vreg);
-		status = regulator_get_voltage(fp_dev->vreg);
-		pr_debug( "power off regulator_value %d!!\n",status);
+	if (!fp_dev->regulator_enabled) {
 		fp_dev->device_available = 0;
+		return 0;
 	}
+	ret = regulator_disable(fp_dev->vreg);
+	if (ret)
+		return ret;
+	fp_dev->regulator_enabled = false;
+	fp_dev->device_available = 0;
+	return 0;
 }
 
 /* delay ms after reset */
@@ -151,6 +109,8 @@ void fp_hw_reset(struct fp_device *fp_dev, u8 delay_ms)
 
 void fp_enable_irq(struct fp_device *fp_dev)
 {
+	if (!fp_dev->irq_requested)
+		return;
 	if (1 == fp_dev->irq_enabled) {
 		pr_debug( "irq already enabled\n");
 	} else {
@@ -162,6 +122,8 @@ void fp_enable_irq(struct fp_device *fp_dev)
 
 void fp_disable_irq(struct fp_device *fp_dev)
 {
+	if (!fp_dev->irq_requested)
+		return;
 	if (0 == fp_dev->irq_enabled) {
 		pr_debug( "irq already disabled\n");
 	} else {

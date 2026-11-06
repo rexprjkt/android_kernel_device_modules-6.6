@@ -35,6 +35,7 @@
 * Included header files
 *****************************************************************************/
 #include "focaltech_core.h"
+#include "../xiaomi_touch/xiaomi_touch_scp.h"
 
 /*****************************************************************************
 * Private constant and macro definitions using #define
@@ -162,6 +163,8 @@ static int rdata_check(u8 *rdata, u32 rlen)
 
 int fts_write(u8 *writebuf, u32 writelen)
 {
+    if (xiaomi_touch_scp_owned())
+        return -EHOSTDOWN;
     int ret = 0;
     int i = 0;
     struct fts_ts_data *ts_data = fts_data;
@@ -260,6 +263,8 @@ int fts_read(u8 *cmd, u32 cmdlen, u8 *data, u32 datalen)
     u8 ctrl = READ_CMD;
     u32 dp = 0;
 
+    if (xiaomi_touch_scp_owned())
+        return cmd && cmdlen ? xiaomi_touch_scp_read(cmd[0], data, datalen) : -EINVAL;
     if (!cmd || !cmdlen || !data || !datalen) {
         FTS_ERROR("cmd/cmdlen/data/datalen is invalid");
         return -EINVAL;

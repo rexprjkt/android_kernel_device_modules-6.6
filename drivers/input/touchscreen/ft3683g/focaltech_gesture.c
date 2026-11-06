@@ -33,6 +33,7 @@
 * 1.Included header files
 *****************************************************************************/
 #include "focaltech_core.h"
+#include "../xiaomi_touch/xiaomi_touch_scp.h"
 
 /******************************************************************************
 * Private constant and macro definitions using #define
@@ -329,7 +330,12 @@ int fts_gesture_readdata(struct fts_ts_data *ts_data, u8 *touch_buf)
 		FTS_ERROR("gesture no support");
 		return -EINVAL;
 	}
-	if (ts_data->gesture_bmode == GESTURE_BM_TOUCH) {
+	if (xiaomi_touch_scp_owned()) {
+		ret = xiaomi_touch_scp_read(FTS_REG_GESTURE_OUTPUT_ADDRESS,
+			buf + 2, FTS_GESTURE_DATA_LEN - 2);
+		if (ret)
+			return ret;
+	} else if (ts_data->gesture_bmode == GESTURE_BM_TOUCH && touch_buf) {
 		memcpy(buf, touch_buf + FTS_TOUCH_DATA_LEN, FTS_GESTURE_DATA_LEN);
 	} else {
 		buf[2] = FTS_REG_GESTURE_OUTPUT_ADDRESS;

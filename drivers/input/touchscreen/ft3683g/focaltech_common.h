@@ -36,7 +36,7 @@
 /*****************************************************************************
 * Macro definitions using #define
 *****************************************************************************/
-#define FTS_DRIVER_VERSION                  "Focaltech V3.4 20211214"
+#define FTS_DRIVER_VERSION                  "Focaltech V3.4 20250724"
 
 #define BYTE_OFF_0(x)           (u8)((x) & 0xFF)
 #define BYTE_OFF_8(x)           (u8)(((x) >> 8) & 0xFF)
@@ -57,13 +57,14 @@
 #define FTS_MAX_CHIP_IDS        8
 
 #define FTS_CHIP_TYPE_MAPPING {\
-{0x90, 0x56, 0x72, 0x00, 0x00, 0x00, 0x00, 0x36, 0xB3},\
+{0x92, 0x36, 0x83, 0x00, 0x00, 0x00, 0x00, 0x36, 0xA3},\
 }
 
 #define FTS_CHIP_ID_MAPPING   { \
 {0x10, {0x821A, 0x8006} }, \
 {0x1C, {0x8726, 0x872A, 0x872B} }, \
 {0x21, {0x820A, 0x820B} }, \
+{0x92, {0x5672} }, \
 }
 
 #define FILE_NAME_LENGTH                    128
@@ -174,16 +175,15 @@ struct ts_ic_info {
 /*****************************************************************************
 * DEBUG function define here
 *****************************************************************************/
-#if FTS_DEBUG_EN
-#define FTS_DEBUG(fmt, args...) pr_info("[FTS_TS]%s:" fmt "\n", __func__, ##args)
-#define FTS_FUNC_ENTER() pr_info("[FTS_TS]%s: Enter\n", __func__)
-#define FTS_FUNC_EXIT() pr_info("[FTS_TS]%s: Exit(%d)\n", __func__, __LINE__)
-#else /* #if FTS_DEBUG_EN*/
-#define FTS_DEBUG(fmt, args...)
-#define FTS_FUNC_ENTER()
-#define FTS_FUNC_EXIT()
-#endif
-
-#define FTS_INFO(fmt, args...) pr_info("[FTS_TS/I]%s:" fmt "\n", __func__, ##args)
-#define FTS_ERROR(fmt, args...) pr_err("[FTS_TS/E]%s:" fmt "\n", __func__, ##args)
+extern unsigned int fts_debug_log_level;
+#define FTS_DEBUG(fmt, args...) do { if (fts_debug_log_level > 3) \
+	pr_info("[FTS_TS]%s:" fmt "\n", __func__, ##args); } while (0)
+#define FTS_FUNC_ENTER() do { if (fts_debug_log_level > 4) \
+	pr_info("[FTS_TS]%s: Enter\n", __func__); } while (0)
+#define FTS_FUNC_EXIT() do { if (fts_debug_log_level > 4) \
+	pr_info("[FTS_TS]%s: Exit(%d)\n", __func__, __LINE__); } while (0)
+#define FTS_INFO(fmt, args...) do { if (fts_debug_log_level > 2) \
+	pr_info("[FTS_TS/I]%s:" fmt "\n", __func__, ##args); } while (0)
+#define FTS_ERROR(fmt, args...) do { if (fts_debug_log_level) \
+	pr_err("[FTS_TS/E]%s:" fmt "\n", __func__, ##args); } while (0)
 #endif /* __LINUX_FOCALTECH_COMMON_H__ */

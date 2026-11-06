@@ -5,6 +5,7 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/notifier.h>
 #include <linux/wait.h>
 #include <linux/types.h>
 #include <linux/ioctl.h>
@@ -20,6 +21,7 @@
 #include <linux/wait.h>
 #include <linux/poll.h>
 #include <linux/slab.h>
+#include <linux/kref.h>
 #include <linux/mempolicy.h>
 #include <linux/dma-mapping.h>
 #include <linux/export.h>
@@ -27,9 +29,14 @@
 #include <linux/seq_file.h>
 #include <linux/time.h>
 #include <linux/time64.h>
+#include <linux/workqueue.h>
 #include <drm/drm_panel.h>
 #include "xiaomi_touch_type_common.h"
-
+/*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 start*/
+#if IS_ENABLED(CONFIG_MIEV)
+#include <miev/mievent.h>
+#endif
+/*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 end*/
 /*CUR,DEFAULT,MIN,MAX*/
 #define VALUE_TYPE_SIZE			6
 #define VALUE_GRIP_SIZE			9
@@ -41,14 +48,16 @@
 #define TP_VERSION_SIZE			64
 #define PARAM_BUF_NUM			10
 #define Touch_GAMETURBOTOOL_BASE 10000
-
 #define COMMON_DATA_BUF_SIZE	10
-
+#define XIAOMI_TOUCH_MAX_PANEL	2
+#define XIAOMI_TOUCH_MMAP_FRAME	1
+#define XIAOMI_TOUCH_MMAP_RAW	2
+#define XIAOMI_TOUCH_MMAP_TIMELINE	3
 #define TOUCH_FOD_SUPPORT 1
-
-
-#define mi_ts_info(fmt, arg...)    pr_info("[MI_TP-INF][%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
-#define mi_ts_err(fmt, arg...)     pr_err("[MI_TP-ERR][%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
+#define FOD_TEST_BASE 10
+extern int current_log_level;
+#define mi_ts_info(fmt, arg...) do { if ((unsigned int)READ_ONCE(current_log_level) > 2) pr_info("[MI_TP-INF][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); } while (0)
+#define mi_ts_err(fmt, arg...) do { if (READ_ONCE(current_log_level) != 0) pr_err("[MI_TP-ERR][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); } while (0)
 #define XIAOMI_TOUCH_UTC_PRINT(tag) \
 	do { \
 		struct timespec64 ts; \
@@ -59,25 +68,6 @@
 			tag, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, \
 			tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec/1000); \
 	} while(0)
-
-// enum suspend_state {
-// 	XIAOMI_TOUCH_RESUME = 0,
-// 	XIAOMI_TOUCH_SUSPEND,
-// 	XIAOMI_TOUCH_LP1,
-// 	XIAOMI_TOUCH_LP2,
-// };
-
-// enum MODE_CMD {
-// 	SET_CUR_VALUE = 0,
-// 	GET_CUR_VALUE,
-// 	GET_DEF_VALUE,
-// 	GET_MIN_VALUE,
-// 	GET_MAX_VALUE,
-// 	GET_MODE_VALUE,
-// 	RESET_MODE,
-// 	SET_LONG_VALUE,
-// };
-
 enum touch_doze_analysis {
 	POWER_RESET = 0,
 	RELOAD_FW,
@@ -88,56 +78,22 @@ enum touch_doze_analysis {
 	ENTER_SUSPEND,
 	ENTER_RESUME,
 };
-
-// enum MODE_TYPE {
-// 	Touch_Game_Mode			= 0,
-// 	Touch_Active_MODE		= 1,
-// 	Touch_UP_THRESHOLD		= 2,
-// 	Touch_Tolerance			= 3,
-// 	Touch_Aim_Sensitivity		= 4,
-// 	Touch_Tap_Stability		= 5,
-// 	Touch_Expert_Mode		= 6,
-// 	Touch_Edge_Filter		= 7,
-// 	Touch_Panel_Orientation		= 8,
-// 	Touch_Report_Rate		= 9,
-// 	Touch_Fod_Enable		= 10,
-// 	Touch_Aod_Enable		= 11,
-// 	Touch_Resist_RF			= 12,
-// 	Touch_Idle_Time			= 13,
-// 	Touch_Doubletap_Mode		= 14,
-// 	Touch_Grip_Mode			= 15,
-// 	Touch_FodIcon_Enable		= 16,
-// 	Touch_Nonui_Mode		= 17,
-// 	Touch_Debug_Level		= 18,
-// 	Touch_Power_Status		= 19,
-// 	Touch_Super_Report              = 29,
-// 	Touch_Idle_Scan_Rate            = 30,
-// 	Touch_Idle_THD                  = 31,
-// 	Touch_Resolution                = 32,
-// 	Touch_Boost_EN                  = 33,
-// 	Touch_Mode_NUM                  = 34,
-// 	THP_LOCK_SCAN_MODE		= THP_CMD_BASE + 0,
-// 	THP_FOD_DOWNUP_CTL		= THP_CMD_BASE + 1,
-// 	THP_SELF_CAP_SCAN		= THP_CMD_BASE + 2,
-// 	THP_REPORT_POINT_SWITCH		= THP_CMD_BASE + 3,
-// 	THP_HAL_INIT_READY		= THP_CMD_BASE + 4,
-// 	THP_HAL_VSYNC_MODE   		= THP_CMD_BASE + 9,
-// 	THP_HAL_CHARGING_STATUS		= THP_CMD_BASE + 10,
-// 	THP_HAL_REPORT_RATE       	= THP_CMD_BASE + 11,
-// 	THP_HAL_DISPLAY_FPS       	= THP_CMD_BASE + 12,
-// 	THP_KNOCK_FRAME_COUNT    	= THP_CMD_BASE + 13,
-// 	THP_HAL_TOUCH_SENSOR       	= THP_CMD_BASE + 15,
-// 	THP_NORMALIZE_FREQ_SCAN  	= THP_CMD_BASE + 68,
-// 	THP_NORMALIZE_K_REQUEST  	= THP_CMD_BASE + 69,
-// 	THP_NORMALIZE_B_REQUEST  	= THP_CMD_BASE + 70,
-// 	THP_IDLE_BASALINE_UPDATE	= THP_CMD_BASE + 71,
-// 	Touch_THP_Dump              = THP_CMD_BASE + 76,
-// 	Touch_GAMETURBOTOOL_FOLLOWUP	= Touch_GAMETURBOTOOL_BASE + 1,
-// 	Touch_GAMETURBOTOOL_RESPONSE	= Touch_GAMETURBOTOOL_BASE + 2,
-// 	Touch_GAMETURBOTOOL_SHAKING		= Touch_GAMETURBOTOOL_BASE + 3,
-// 	Touch_GAMETURBOTOOL_NUM,
-// };
-
+/*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 start*/
+#if IS_ENABLED(CONFIG_MIEV)
+enum touch_mievent_code {
+	TOUCH_EVENT_TRANSFER_ERR = 912001001,
+	TOUCH_EVENT_FWLOAD_ERR = 912001002,
+	TOUCH_EVENT_PARAM_ERR = 912001003,
+	TOUCH_EVENT_OPENTEST_FAIL = 912002001,
+	TOUCH_EVENT_SHORTTEST_FAIL = 912002002,
+};
+enum param_parse_fail_type {
+	ERROR_REGULATOR_INIT,
+	ERROR_GPIO_REQUEST,
+	ERROR_DTS_PARSE,
+};
+#endif
+/*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 end*/
 struct xiaomi_touch_interface {
 	int thp_cmd_buf[MAX_BUF_SIZE];
 	char thp_cmd_data_buf[MAX_BUF_SIZE];
@@ -150,6 +106,10 @@ struct xiaomi_touch_interface {
 	wait_queue_head_t wait_queue_ready;
 	int touch_event_status;
 	int touch_event_ready_status;
+/*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 start*/
+	void (*touch_dfs_test)(int value);
+/*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 end*/
+	struct_group(callbacks,
 	int (*setModeValue)(int Mode, int value);
 	int (*setModeLongValue)(int Mode, int value_len, int *value);
 	int (*getModeValue)(int Mode, int value_type);
@@ -180,11 +140,12 @@ struct xiaomi_touch_interface {
 	int (*set_irq_re_register)(void);
 	int (*get_irq_status)(void);
 	int (*touch_doze_analysis)(int value);
+	int (*fod_test_store)(int value);
 	u8 * (*get_touch_ic_buffer)(void);
+	);
 	int long_mode_len;
 	int long_mode_value[MAX_BUF_SIZE];
-
-	bool is_enable_touchraw;
+	int is_enable_touchraw;
 	int palm_sensor_onoff;
 	int thp_downthreshold;
 	int thp_upthreshold;
@@ -202,7 +163,7 @@ struct xiaomi_touch_interface {
 	char tp_hal_version[TP_VERSION_SIZE];
 	bool is_enable_touchdelta;
 	bool active_status;
-	bool finger_status;
+	int finger_status;
 	int irq_no;
 	int touch_sensor_ctrl_value;
 	struct list_head private_data_list;
@@ -211,7 +172,6 @@ struct xiaomi_touch_interface {
 	atomic_t common_data_buf_index;
 	common_data_t common_data_buf[COMMON_DATA_BUF_SIZE];
 };
-
 struct xiaomi_touch {
 	struct miscdevice misc_dev;
 	struct device *dev;
@@ -225,37 +185,30 @@ struct xiaomi_touch {
 	struct mutex abnormal_event_mutex;
 	wait_queue_head_t wait_queue;
 };
-
 #define LAST_TOUCH_EVENTS_MAX		512
-
 enum touch_state {
 	EVENT_INIT,
 	EVENT_DOWN,
 	EVENT_UP,
 };
-
 struct touch_event {
 	u32 slot;
 	enum touch_state state;
 	struct timespec64 touch_time;
 };
-
 struct last_touch_event {
 	int head;
 	struct touch_event touch_event_buf[LAST_TOUCH_EVENTS_MAX];
 };
-
 struct touch_cmd_info {
 	unsigned int param_buf[MAX_BUF_SIZE];
 	int thp_cmd_size;
 };
-
 struct abnormal_event {
 	u16 type;
 	u16 code;
 	u16 value;
 };
-
 #define SENSITIVE_EVENT_BUF_SIZE	(10)
 struct abnormal_event_buf {
 	int top;
@@ -263,7 +216,6 @@ struct abnormal_event_buf {
 	bool full_flag;
 	struct abnormal_event abnormal_event[SENSITIVE_EVENT_BUF_SIZE];
 };
-
 struct xiaomi_touch_pdata {
 	struct device_node *of_node;
 	struct xiaomi_touch *device;
@@ -295,50 +247,143 @@ struct xiaomi_touch_pdata {
 	wait_queue_head_t poll_wait_queue_head;
 	atomic_t common_data_index;
 };
+struct xiaomi_touch_client {
+	u64 generation;
+	bool dead;
+	struct list_head node;
+	u8 mmap_area;
+	s8 touch_id;
+	wait_queue_head_t poll_wait_queue_head;
+	atomic_t common_data_index;
+	atomic_t frame_data_index;
+	atomic_t raw_data_index;
+};
+/* Allocation metadata outlives the panel/device whenever a VMA still owns it. */
+struct xiaomi_touch_backing {
+	struct kref ref;
+	void *data;
+	size_t size;
+	phys_addr_t phys;
+};
+struct xiaomi_touch_backing *xiaomi_touch_backing_alloc(size_t size);
+void xiaomi_touch_backing_put(struct xiaomi_touch_backing *backing);
+/* Caller serializes the owner pointer against detach until this returns. */
+int xiaomi_touch_backing_mmap(struct xiaomi_touch_backing *backing,
+			      struct vm_area_struct *vma);
 
+struct xiaomi_touch_panel_data {
+	bool registered;
+	bool panel_notifier_registered;
+	bool suspended;
+	bool pm_resume;
+	bool pm_async_suspend;
+	bool charge_notifier_registered;
+	bool charge_initialized;
+	int charge_state;
+	struct notifier_block charge_notifier;
+	struct work_struct charge_work;
+	struct device *dev;
+	struct notifier_block panel_notifier;
+	struct workqueue_struct *pm_wq;
+	struct work_struct resume_work;
+	struct workqueue_struct *mode_wq;
+	struct work_struct cmd_work;
+	struct work_struct switch_work;
+	struct work_struct grid_work;
+	int touch_mode[Touch_Mode_NUM][VALUE_TYPE_SIZE];
+	int grid_value[CMD_DATA_BUF_SIZE];
+	int grid_length;
+	struct mutex pm_lock;
+	struct proc_dir_entry *info_proc[4];
+	char hal_version[128];
+	char limit_version[30];
+	int self_test_result;
+	struct task_struct *temp_thread;
+	wait_queue_head_t temp_wait;
+	bool temp_enabled;
+	hardware_param_t hardware_param;
+	hardware_operation_t hardware_operation;
+	atomic_t frame_data_index;
+	size_t frame_data_size;
+	u8 frame_data_buf_size;
+	struct xiaomi_touch_backing *frame_data;
+	atomic_t raw_data_index;
+	size_t raw_data_size;
+	u8 raw_data_buf_size;
+	struct xiaomi_touch_backing *raw_data;
+	struct list_head client_list;
+	spinlock_t client_lock;
+	atomic_t common_data_index;
+	struct mutex common_data_lock;
+	common_data_t common_data_buf[COMMON_DATA_BUF_SIZE];
+};
 struct xiaomi_touch *xiaomi_touch_dev_get(int minor);
-
 extern struct class *get_xiaomi_touch_class(void);
-
 extern struct device *get_xiaomi_touch_dev(void);
-
 extern int update_palm_sensor_value(int value);
-
 extern int update_prox_sensor_value(int value);
-
 extern int xiaomitouch_register_modedata(int touchId, struct xiaomi_touch_interface *data);
-
+extern int register_touch_panel_common(struct device *dev, int touch_id,
+		const hardware_param_t *hardware_param,
+		const hardware_operation_t *hardware_operation);
+/* Stop callbacks first; unregister releases backing after the producer stops. */
+extern void xiaomi_touch_stop_panel_common(int touch_id);
+extern void unregister_touch_panel_common(int touch_id);
+extern int driver_get_touch_mode_common(int touch_id, int mode);
+void driver_update_touch_mode_common(int touch_id, const int *values, u64 changed);
+int xiaomi_get_gesture_type_common(int touch_id);
+void schedule_resume_suspend_work_common(int touch_id, bool resume);
+struct class *get_xiaomi_touch_class_common(void);
+int update_palm_sensor_value_common(int value);
+int update_fod_press_status_common(int value);
+void last_touch_events_collect_common(int slot, int state);
+void add_common_data_to_buf_common(s8 touch_id, enum common_data_cmd cmd,
+		enum common_data_mode mode, int length, int *data);
+void xiaomi_touch_mievent_report_int_common(unsigned int code, int panel_id,
+	const char *fault_name, const char *vendor_name, long error_code);
+void xiaomi_touch_mievent_report_str_common(unsigned int code, int panel_id,
+	const char *fault_name, const char *vendor_name);
+void init_touch_irq(int touch_id, struct device_node *np);
+void remove_touch_irq_boost(int touch_id);
+void touch_irq_boost_switch(int touch_id, bool game);
+void touch_irq_cpumask(int touch_id);
+void xiaomi_touch_irq_boost(int touch_id);
+void xiaomi_touch_irq_boost_release(int touch_id);
+extern void xiaomi_touch_remove_info_proc_common(int touch_id);
+extern int get_bms_temp_common(void);
+extern void enable_temperature_detection_func(bool enable);
+extern void stop_temperature_detection_func(void);
+extern int xiaomi_touch_get_charge_state(int touch_id);
+extern int xiaomi_register_panel_notifier_common(struct device *dev,
+		int touch_id);
+extern void xiaomi_unregister_panel_notifier_common(int touch_id);
+extern void *get_raw_data_base_common(int touch_id);
+extern void notify_raw_data_update_common(int touch_id);
 extern int copy_touch_rawdata(char *raw_base,  int len);
-
 extern int update_touch_rawdata(void);
 extern void get_current_timestamp(char* timebuf, int len);
-
 extern int update_clicktouch_raw(void);
-
 extern void last_touch_events_collect(int slot, int state);
-
+extern void add_input_event_timeline_before_event_time_common(int stage,
+		u64 frame_count, u64 time0, u64 time1);
 int xiaomi_touch_set_suspend_state(int state);
-
 struct drm_panel *xiaomi_touch_check_panel(void);
-
 void add_common_data_to_buf(s8 touch_id, enum common_data_cmd cmd, enum common_data_mode mode, int length, int *data);
-
 extern int notify_gesture_single_tap(void);
 #ifdef	TOUCH_FOD_SUPPORT
 extern int update_fod_press_status(int value);
 #endif
-
 extern void thp_send_cmd_to_hal(int cmd, int value);
-
 extern void update_active_status(bool status);
-
 extern void update_touch_irq_no(int irq_no);
-
 extern int knock_node_init(void);
 extern void knock_node_release(void);
+extern void knock_node_publish(void);
 extern void register_frame_count_change_listener(void *listener);
 extern void update_knock_data(u8 *buf, int size, int frame_id);
 extern void knock_data_notify(void);
-
-
+#if IS_ENABLED(CONFIG_MIEV)
+void xiaomi_touch_mievent_report_int(unsigned int code, int panel_id, const char *fault_name, const char *vendor_name, long error_code);
+void xiaomi_touch_mievent_report_str(unsigned int code, int panel_id, const char *fault_name, const char *vendor_name);
+#endif
 #endif

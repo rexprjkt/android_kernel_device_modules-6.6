@@ -1,9 +1,7 @@
 #ifndef __XIAOMI_TOUCH_TYPE_COMMON_H__
 #define __XIAOMI_TOUCH_TYPE_COMMON_H__
-
 #include <linux/types.h>
-
-#define CMD_DATA_BUF_SIZE	128
+#define CMD_DATA_BUF_SIZE	256
 #define THP_CMD_BASE		1000
 #define THP_IC_CMD_BASE		3000
 #define TOUCH_MOTION_BASE        200
@@ -16,14 +14,12 @@ typedef uint8_t u8;
 typedef char s8;
 typedef int32_t s32;
 */
-
 enum suspend_state {
 	XIAOMI_TOUCH_RESUME = 0,
 	XIAOMI_TOUCH_SUSPEND,
 	XIAOMI_TOUCH_LP1,
 	XIAOMI_TOUCH_LP2,
 };
-
 enum THP_IC_MODE_TYPE {
 	SET_IDLE_THD						= THP_IC_CMD_BASE + 1,
 	SET_IDLE_RATE						= THP_IC_CMD_BASE + 2,
@@ -73,7 +69,6 @@ enum THP_IC_MODE_TYPE {
 	SET_CRC_EN							= THP_IC_CMD_BASE + 46,
 	SET_TOUCH_IC_INFO					= THP_IC_CMD_BASE + 50,
 };
-
 enum ioctl_cmd {
 	COMMON_DATA_CMD = 0,
 	HARDWARE_PARAM_CMD,
@@ -82,7 +77,6 @@ enum ioctl_cmd {
 	GET_FRAME_DATA_INDEX,
 	RAW_DATA_INDEX,
 };
-
 enum common_data_cmd {
 	SET_CUR_VALUE = 0,
 	GET_CUR_VALUE,
@@ -98,7 +92,6 @@ enum common_data_cmd {
 	SET_CMD_FOR_DRIVER,
 	GET_DUMP_PARAM
 };
-
 enum common_data_mode {
 	Touch_Game_Mode					= 0,
 	Touch_Active_MODE				= 1,
@@ -129,7 +122,9 @@ enum common_data_mode {
 	Touch_Palm_Sensor				= 26,
 	Touch_Suspend					= 27,
 	Touch_Hand_Detect_Result		= 28,
-	Touch_Mode_NUM					= 29,
+	Touch_Fod_Setting				= 35,
+	Touch_Fingerprint_Auth_State	= 41,
+	Touch_Mode_NUM					= 35,
 	TOUCH_CLOUD_MODE_WATER_PROOF	= 100,
 	Touch_Boost_EN					= TOUCH_MOTION_BASE + 0,
 	Touch_Empty_Int					= TOUCH_MOTION_BASE + 1,
@@ -179,6 +174,7 @@ enum common_data_mode {
 	THP_Y_RES						= THP_CMD_BASE + 38,
 	THP_TX_NUM						= THP_CMD_BASE + 39,
 	THP_RX_NUM						= THP_CMD_BASE + 40,
+	THP_FOD_ATTN_STATUS				= THP_CMD_BASE + 112,
 	THP_PRINT_DIF1_EN				= THP_CMD_BASE + 41,
 	THP_STANDARDT_RAW				= THP_CMD_BASE + 42,
 	THP_STANDARDT_DIF1				= THP_CMD_BASE + 43,
@@ -228,7 +224,6 @@ enum common_data_mode {
 	Touch_GAMETURBOTOOL_PACKAGE		= Touch_GAMETURBOTOOL_BASE + 100,
 	Touch_GAMETURBOTOOL_NUM,
 };
-
 typedef struct common_data {
 	s8 touch_id;
 	u8 cmd;
@@ -236,7 +231,39 @@ typedef struct common_data {
 	u16 data_len;
 	s32 data_buf[CMD_DATA_BUF_SIZE];
 } common_data_t;
-
+/* Rodin stock modules pass exactly 0xd8 bytes (27 AArch64 pointers).
+ * Offsets recovered from both provider initialization routines and common's
+ * register_touch_panel_common; do not insert Dash-only callbacks here.
+ */
+typedef struct hardware_operation {
+	int (*self_test)(const char *command, int *result); /* 0x00 */
+	int (*ic_data_collect)(char *output, int *length);                 /* 0x08 */
+	int (*lockdown_info_read)(u8 *info);               /* 0x10 */
+	int (*get_fw_version)(char *version);              /* 0x18 */
+	int (*set_cur_value)(int mode, int *values);        /* 0x20 */
+	void (*get_mode_value)(common_data_t *data);    /* 0x28 */
+	void (*get_mode_all)(common_data_t *data);         /* 0x30 */
+	void (*reset_mode)(common_data_t *data);                       /* 0x38 */
+	void (*switch_mode)(int gesture_type);                         /* 0x40 */
+	void (*cmd_mode_update)(u64 changed, int *snapshot);/* 0x48 */
+	void (*reserved_50)(void);                        /* 0x50: null in both providers */
+	int (*palm_sensor_write)(int value);               /* 0x58 */
+	int (*enable_touch_raw)(int value);                /* 0x60 */
+	u8 (*panel_vendor_read)(void);                     /* 0x68 */
+	u8 (*panel_color_read)(void);                      /* 0x70 */
+	u8 (*panel_display_read)(void);                    /* 0x78 */
+	char (*touch_vendor_read)(void);                   /* 0x80 */
+	void (*get_ic_buffer)(u64 address, char *buffer);                      /* 0x88 */
+	int (*touch_doze_analysis)(int value);             /* 0x90 */
+	int (*log_level_control)(int value);              /* 0x98 */
+	int (*htc_ic_set_mode_value)(common_data_t *data);  /* 0xa0 */
+	int (*htc_ic_get_mode_value)(common_data_t *data);  /* 0xa8 */
+	int (*resume_suspend)(int resume, int gesture_type);/* 0xb0 */
+	void (*set_charge_state)(int charging);            /* 0xb8 */
+	int (*touch_dfs_test)(int value);                  /* 0xc0 */
+	void (*fod_test)(int value);                       /* 0xc8 */
+	int (*set_thermal_temp)(int temperature, bool read_bms); /* 0xd0 */
+} hardware_operation_t;
 typedef struct hardware_param {
 	u16 x_resolution;
 	u16 y_resolution;
@@ -251,6 +278,6 @@ typedef struct hardware_param {
 	char config_file_name[64];
 	char driver_version[64];
 	char fw_version[64];
+	u8 temperature_change_threshold;
 } hardware_param_t;
-
 #endif

@@ -851,14 +851,6 @@ static const struct proc_ops tp_lockdown_info_fops = {
 };
 int fts_create_proc(struct fts_ts_data *ts_data)
 {
-	struct ftxxxx_proc *proc = &ts_data->proc;
-
-	proc->tp_fw_version_proc = proc_create("tp_fw_version", 0444, NULL, &tp_fw_version_fops);
-	if (proc->tp_fw_version_proc == NULL) {
-		FTS_ERROR("tp_fw_version proc create failed");
-		return -ENOMEM;
-	}
-	FTS_INFO("Create proc entry success!");
 	return 0;
 }
 void fts_remove_proc(struct fts_ts_data *ts_data)

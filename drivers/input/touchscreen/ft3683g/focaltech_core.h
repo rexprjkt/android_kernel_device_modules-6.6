@@ -209,6 +209,13 @@ struct tp_info {
 };
 
 struct fts_ts_data {
+	bool common_registered;
+	bool scp_registered;
+	bool scp_mistouch_close;
+	bool raw_enabled;
+	u32 raw_debug_type;
+	u64 raw_frame_count;
+
         struct i2c_client *client;
         struct spi_device *spi;
         struct device *dev;
@@ -288,6 +295,8 @@ struct fts_ts_data {
         struct pinctrl_state *pins_active;
         struct pinctrl_state *pins_suspend;
 	struct pinctrl_state *pinctrl_state_spimode;
+	struct pinctrl_state *pins_cs_gpio;
+	struct pinctrl_state *pins_cs_spi;
 #endif
 #ifdef FTS_TOUCHSCREEN_FOD
 	int fod_status;
@@ -368,6 +377,16 @@ MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 /*****************************************************************************
 * Global variable or extern global variabls/functions
 *****************************************************************************/
+int fts_rodin_self_test(const char *command, int *result);
+int fts_read_and_report_foddata(struct fts_ts_data *ts);
+void fts_update_gesture_state(struct fts_ts_data *ts, int bit, bool enable);
+int fts_touch_doze_analysis(int input);
+void fts_rodin_game_values(u64 changed, int *values);
+int fts_rodin_register(struct fts_ts_data *ts);
+int fts_rodin_read_frame(struct fts_ts_data *ts);
+int fts_rodin_enable_raw(int enable);
+int fts_ts_suspend(struct device *dev);
+int fts_ts_resume(struct device *dev);
 extern struct fts_ts_data *fts_data;
 
 /* communication interface */
@@ -456,4 +475,11 @@ extern int mi_disp_set_fod_queue_work(u32 fod_btn, bool from_touch);
 extern int power_supply_reg_notifier(struct notifier_block *nb);
 extern int power_supply_is_system_supplied(void);
 /* power supply functions end*/
+
+void fts_recover_gesture_from_sleep(struct fts_ts_data *data);
+int fts_rodin_collect(char *output, int *length);
+int fts_reset_mode(int mode);
+int fts_get_mode_value(int mode, int value_type);
+int fts_get_mode_all(int mode, int *value);
+
 #endif /* __LINUX_FOCALTECH_CORE_H__ */

@@ -1,5 +1,7 @@
 config TOUCHSCREEN_FOCALTECH_FT3683G
 	tristate "focaltech tianma spi touchscreen"
+	depends on SPI
+	select TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON
 	default m
 	help
 	  Say Y here if you have a focaltech series touch controller

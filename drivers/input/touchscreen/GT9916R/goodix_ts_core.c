@@ -39,17 +39,17 @@
 #endif
 
 #include "goodix_ts_core.h"
+#include "../xiaomi_touch/xiaomi_touch_scp.h"
 //#include "mi_disp_notifier.h"
 
-#define GOODIX_DEFAULT_CFG_NAME	"goodix_cfg_group_m16.cfg"
+#define GOODIX_DEFAULT_CFG_NAME	"goodix_cfg_group.cfg"
 #define GOOIDX_INPUT_PHYS		"goodix_ts/input0"
 #define PINCTRL_STATE_ACTIVE		"pmx_ts_active"
 #define PINCTRL_STATE_SUSPEND		"pmx_ts_suspend"
 #define PINCTRL_STATE_BOOT		"pmx_ts_boot"
-#define PINCTRL_STATE_SPIMODE		"pmx_ts_spi_mode"
+#define PINCTRL_STATE_SPIMODE		"pmx_gt_spi_mode"
 
-#define DISP_ID_DET (30 + 38)
-#define DISP_ID1_DET (30 + 164)
+#define DISP_ID_DET (512 + 127)
 
 #ifdef CONFIG_TOUCH_BOOST
 extern void touch_irq_boost(void);
@@ -64,6 +64,7 @@ struct goodix_module goodix_modules;
 int core_module_prob_sate = CORE_MODULE_UNPROBED;
 struct goodix_ts_core *goodix_core_data;
 static int goodix_send_ic_config(struct goodix_ts_core *cd, int type);
+static void goodix_update_self_config(struct goodix_ts_core *cd);
 static void goodix_set_gesture_work(struct work_struct *work);
 static struct proc_dir_entry *touch_debug;
 static int goodix_get_charging_status(void);
@@ -198,6 +199,8 @@ int goodix_register_ext_module(struct goodix_ext_module *module)
 	if (!module)
 		return -EINVAL;
 
+	if (!get_xiaomi_touch_class_common())
+		return -EPROBE_DEFER;
 	ts_info("%s : IN", __func__);
 
 	goodix_core_module_init();
@@ -216,6 +219,8 @@ int goodix_register_ext_module_no_wait(struct goodix_ext_module *module)
 {
 	if (!module)
 		return -EINVAL;
+	if (!get_xiaomi_touch_class_common())
+		return -EPROBE_DEFER;
 	ts_info("%s : IN", __func__);
 	goodix_core_module_init();
 	/* driver probe failed */
@@ -796,10 +801,14 @@ static ssize_t goodix_ts_debug_log_store(struct device *dev,
 	if (!buf || count <= 0)
 		return -EINVAL;
 
-	if (buf[0] != '0')
-		debug_log_flag = true;
-	else
-		debug_log_flag = false;
+	if (buf[0] == 'u' || buf[0] == 'v') {
+		goodix_core_data->self_config_enabled = buf[0] == 'v';
+		goodix_core_data->self_config_pending = 1;
+	}
+	goodix_debug_log_level = (unsigned char)buf[0] - '0';
+	debug_log_flag = goodix_debug_log_level > 3;
+	if (!goodix_core_data->scp_mistouch_close)
+		xiaomi_touch_scp_log_level(goodix_debug_log_level);
 	return count;
 }
 
@@ -1084,8 +1093,6 @@ static void goodix_ts_procfs_init(struct goodix_ts_core *core_data)
 {
 	if (!proc_mkdir("goodix_ts", NULL))
 		return;
-	proc_create_data("tp_data_dump",
-			0664, NULL, &rawdata_proc_fops, core_data);
 	proc_create_data("goodix_ts/tp_capacitance_data",
 			0664, NULL, &rawdata_proc_fops, core_data);
 
@@ -1150,29 +1157,25 @@ static int goodix_parse_dt_resolution(struct device_node *node,
 {
 	int ret;
 
-#ifdef CONFIG_FACTORY_BUILD
-	ret = of_property_read_u32(node, "goodix,panel-max-x-10",
+	ret = of_property_read_u32(node, "goodix,panel-max-x",
 				 &board_data->panel_max_x);
-#else
-	ret = of_property_read_u32(node, "goodix,panel-max-x-16",
-				 &board_data->panel_max_x);
-#endif
 	if (ret) {
 		ts_err("failed get panel-max-x");
 		return ret;
 	}
 
-#ifdef CONFIG_FACTORY_BUILD
-	ret = of_property_read_u32(node, "goodix,panel-max-y-10",
+	ret = of_property_read_u32(node, "goodix,panel-max-y",
 				 &board_data->panel_max_y);
-#else
-	ret = of_property_read_u32(node, "goodix,panel-max-y-16",
-				 &board_data->panel_max_y);
-#endif
 	if (ret) {
 		ts_err("failed get panel-max-y");
 		return ret;
 	}
+
+	board_data->super_resolution_factor = 1;
+	of_property_read_u32(node, "goodix,super-resolution-factor",
+			     &board_data->super_resolution_factor);
+	if (!board_data->super_resolution_factor)
+		return -EINVAL;
 
 	ret = of_property_read_u32(node, "goodix,panel-max-w",
 				 &board_data->panel_max_w);
@@ -1275,36 +1278,15 @@ static int goodix_parse_dt(struct device_node *node,
 				sizeof(board_data->iovdd_name));
 	}
 
-	/* get firmware file name 
-	*gpio_38 = gpio_get_value(DISP_ID_DET);
-	*gpio_164 = gpio_get_value(DISP_ID1_DET);
-	*if (gpio_38 == 0 && gpio_164 == 1) {
-	*	name_tmp = "goodix_firmware_m16_TM.bin";
-	*} else
-	*	name_tmp = "goodix_firmware_m16_GVO.bin";
-	*/
-#ifdef CONFIG_FACTORY_BUILD
-	name_tmp = "goodix_firmware_10.bin";
-#else
-	name_tmp = "goodix_firmware_16.bin";
-#endif
-	ts_info("firmware name from dt: %s", name_tmp);
-	strncpy(board_data->fw_name, name_tmp, sizeof(board_data->fw_name));
-
-
-	/* get config file name 
-	*if (gpio_38 == 0 && gpio_164 == 1) {
-	*	name_tmp = "goodix_cfg_group_m16_TM.bin";
-	*} else
-	*	name_tmp = "goodix_cfg_group_m16_GVO.bin";
-	*/
-#ifdef CONFIG_FACTORY_BUILD
-	name_tmp = "goodix_cfg_group_10.bin";
-#else
-	name_tmp = "goodix_cfg_group_16.bin";
-#endif
-	ts_info("config name from dt: %s", name_tmp);
-	strncpy(board_data->cfg_bin_name, name_tmp, sizeof(board_data->cfg_bin_name));
+	/* Stock Rodin reads the shared SPI node; file names are completed with
+	 * a .bin suffix during later initialization.
+	 */
+	r = of_property_read_string(node, "goodix,firmware-name", &name_tmp);
+	strscpy(board_data->fw_name, r ? TS_DEFAULT_FIRMWARE : name_tmp,
+		sizeof(board_data->fw_name));
+	r = of_property_read_string(node, "goodix,config-name", &name_tmp);
+	strscpy(board_data->cfg_bin_name, r ? TS_DEFAULT_CFG_BIN : name_tmp,
+		sizeof(board_data->cfg_bin_name));
 
 	/* get xyz resolutions */
 	r = goodix_parse_dt_resolution(node, board_data);
@@ -1416,17 +1398,9 @@ finger_pos:
 			 *whether the TouchIC firmware supports the super-resolution
 			 *scanning function
 			 */
-			if (cd->ic_info.other.screen_max_x > cd->board_data.panel_max_x) {
-				/* if supported */
-				resolution_factor = cd->ic_info.other.screen_max_x / cd->board_data.panel_max_x;
-				report_x = touch_data->coords[i].x;
-				report_y = touch_data->coords[i].y;
-			} else {
-				/* if not supported */
-				resolution_factor = cd->board_data.panel_max_x / cd->ic_info.other.screen_max_x;
-				report_x = touch_data->coords[i].x * resolution_factor;
-				report_y = touch_data->coords[i].y * resolution_factor;
-			}
+			resolution_factor = cd->board_data.super_resolution_factor;
+			report_x = touch_data->coords[i].x * resolution_factor;
+			report_y = touch_data->coords[i].y * resolution_factor;
 			ts_debug("panel_max_x: %d, screen_max_x:%d",
 			cd->board_data.panel_max_x, cd->ic_info.other.screen_max_x);
 			ts_debug("report: id %d, x %d, y %d, w %d resolution_factor:%d",
@@ -1591,6 +1565,7 @@ static irqreturn_t goodix_ts_threadirq_func(int irq, void *data)
 	if (!core_data->tools_ctrl_sync && !ts_event->retry)
 		hw_ops->after_event_handler(core_data);
 	ts_event->retry = 0;
+	touch_irq_cpumask(0);
 #ifdef CONFIG_TOUCH_BOOST
 	lpm_disable_for_dev(false, EVENT_INPUT);
 #endif
@@ -1604,7 +1579,7 @@ static irqreturn_t goodix_ts_threadirq_func(int irq, void *data)
  * @core_data: pointer to touch core data
  * return: 0 ok, <0 failed
  */
-static int goodix_ts_irq_setup(struct goodix_ts_core *core_data)
+int goodix_ts_irq_setup(struct goodix_ts_core *core_data)
 {
 	const struct goodix_ts_board_data *ts_bdata = board_data(core_data);
 	int ret;
@@ -1621,7 +1596,7 @@ static int goodix_ts_irq_setup(struct goodix_ts_core *core_data)
 				      core_data->irq, NULL,
 				      goodix_ts_threadirq_func,
 				      ts_bdata->irq_flags | IRQF_ONESHOT,
-				      GOODIX_CORE_DRIVER_NAME,
+				      "xiaomi_tpgoodix_ts",
 				      core_data);
 	if (ret < 0)
 		ts_err("Failed to requeset threaded irq:%d", ret);
@@ -1668,6 +1643,7 @@ static int goodix_ts_power_init(struct goodix_ts_core *core_data)
 			ret = PTR_ERR(core_data->iovdd);
 			ts_err("Failed to get regulator iovdd:%d", ret);
 			core_data->iovdd = NULL;
+			return ret;
 		}
 		ret = regulator_set_voltage(core_data->iovdd, 1800000, 1800000);
 		if (ret < 0) {
@@ -1874,14 +1850,14 @@ static int goodix_ts_input_dev_config(struct goodix_ts_core *core_data)
 
 	/* set input parameters */
 	input_set_abs_params(input_dev, ABS_MT_POSITION_X,
-			     0, core_data->ic_info.other.screen_max_x, 0, 0);
+			     0, ts_bdata->panel_max_x, 0, 0);
 	input_set_abs_params(input_dev, ABS_MT_POSITION_Y,
-			     0, core_data->ic_info.other.screen_max_y, 0, 0);
+			     0, ts_bdata->panel_max_y, 0, 0);
 	input_set_abs_params(input_dev, ABS_MT_TOUCH_MAJOR,
 			     0, ts_bdata->panel_max_w, 0, 0);
 	input_set_abs_params(input_dev, ABS_MT_WIDTH_MAJOR,
 			     0, 100, 0, 0);
-	input_set_abs_params(input_dev, ABS_MT_WIDTH_MAJOR,
+	input_set_abs_params(input_dev, ABS_MT_WIDTH_MINOR,
 			     0, 100, 0, 0);
 #ifdef INPUT_TYPE_B_PROTOCOL
 /* #if LINUX_VERSION_CODE > KERNEL_VERSION(3, 7, 0) */
@@ -2143,7 +2119,7 @@ static void goodix_ts_release_connects(struct goodix_ts_core *core_data)
  * goodix_ts_suspend - Touchscreen suspend function
  * Called by PM/FB/EARLYSUSPEN module to put the device to  sleep
  */
-static int goodix_ts_suspend(struct goodix_ts_core *core_data)
+int goodix_ts_suspend(struct goodix_ts_core *core_data)
 {
 	struct goodix_ext_module *ext_module, *next;
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
@@ -2234,7 +2210,7 @@ out:
  * goodix_ts_resume - Touchscreen resume function
  * Called by PM/FB/EARLYSUSPEN module to wakeup device
  */
-static int goodix_ts_resume(struct goodix_ts_core *core_data)
+int goodix_ts_resume(struct goodix_ts_core *core_data)
 {
 	struct goodix_ext_module *ext_module, *next;
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
@@ -2318,6 +2294,7 @@ out:
 		ret = hw_ops->palm_on(core_data, core_data->palm_status);
 
 	/* enable irq */
+	goodix_update_self_config(core_data);
 	hw_ops->irq_enable(core_data, true);
 
 	/*release fod event  仿照K9E代码添加暂时不懂有没有影响以及会不会对FOD有影响 M12没执行这个函数
@@ -2610,25 +2587,12 @@ int goodix_ts_stage2_init(struct goodix_ts_core *cd)
 
 	INIT_WORK(&cd->gesture_work, goodix_set_gesture_work);
 
-	/* register suspend and resume notifier callchain */
 	INIT_WORK(&cd->suspend_work, goodix_ts_suspend_work);
 	INIT_WORK(&cd->resume_work, goodix_ts_resume_work);
-#if defined(CONFIG_DRM)
-	cd->notifier.notifier_call = goodix_drm_state_change_callback;
-	if (mi_disp_register_client(&cd->notifier) < 0)
-	//if(mtk_disp_notifier_register(GOODIX_SPI_NAME, &cd->notifier) < 0)
-		ts_err("ERROR: register notifier failed!\n");
-#else
-	cd->fb_notifier.notifier_call = goodix_ts_fb_notifier_callback;
-	if (fb_register_client(&cd->fb_notifier))
-		ts_err("Failed to register fb notifier client:%d", ret);
-#endif
-
 	/* register charger status change notifier */
 	INIT_WORK(&cd->power_supply_work, charger_power_supply_work);
 	cd->charger_notifier.notifier_call = charger_status_event_callback;
-	if (power_supply_reg_notifier(&cd->charger_notifier))
-		ts_err("failed to register charger notifier client");
+
 
 	/* get ts lockdown info */
 	goodix_ts_get_lockdown_info(cd);
@@ -2683,8 +2647,38 @@ static int goodix_send_ic_config(struct goodix_ts_core *cd, int type)
 		return 0;
 	}
 
+	if (goodix_is_self_config_pair(config_id, cd->ic_info.version.config_id) !=
+	    !!cd->self_config_pending)
+		return 0;
 	ts_info("try send config, id=0x%x", config_id);
 	return cd->hw_ops->send_config(cd, cfg->data, cfg->len);
+}
+
+static void goodix_update_self_config(struct goodix_ts_core *cd)
+{
+	const char *base;
+	char name[GOODIX_MAX_STR_LABLE_LEN];
+	size_t length;
+	int ret;
+
+	if (!cd->self_config_pending)
+		return;
+	cd->self_config_pending++;
+	if (of_property_read_string(cd->bus->dev->of_node, "goodix,config-name", &base))
+		base = TS_DEFAULT_CFG_BIN;
+	length = strlen(base);
+	if (length >= 4 && !strcmp(base + length - 4, ".bin"))
+		length -= 4;
+	ret = snprintf(name, sizeof(name), cd->self_config_enabled ? "%.*s.bin" :
+		       "%.*s_SelfDis.bin", (int)length, base);
+	if (ret >= sizeof(name))
+		return;
+	strscpy(cd->board_data.cfg_bin_name, name, sizeof(cd->board_data.cfg_bin_name));
+	ret = goodix_get_config_proc(cd);
+	if (!ret)
+		ret = goodix_send_ic_config(cd, CONFIG_TYPE_NORMAL);
+	if (!ret || cd->self_config_pending >= 6)
+		cd->self_config_pending = 0;
 }
 
 /**
@@ -2694,11 +2688,32 @@ static int goodix_send_ic_config(struct goodix_ts_core *cd, int type)
  * This function respond for get fw version and try upgrade fw and config.
  * Note: when init encounter error, need release all resource allocated here.
  */
+static int goodix_complete_fw_name(char *name, size_t size)
+{
+	size_t len = strlen(name);
+
+	if (len >= 4 && !strcmp(name + len - 4, ".bin"))
+		return 0;
+	if (strlcat(name, ".bin", size) >= size)
+		return -ENAMETOOLONG;
+	return 0;
+}
+
 static int goodix_later_init_thread(void *data)
 {
 	int ret, i;
 	struct goodix_ts_core *cd = data;
 	struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
+
+	/* Rodin DT supplies basenames, as in stock goodix_start_later_init. */
+	ret = goodix_complete_fw_name(cd->board_data.fw_name,
+				      sizeof(cd->board_data.fw_name));
+	if (ret)
+		goto err_out;
+	ret = goodix_complete_fw_name(cd->board_data.cfg_bin_name,
+				      sizeof(cd->board_data.cfg_bin_name));
+	if (ret)
+		goto err_out;
 
 	/* setp 1: get config data from config bin */
 	if (goodix_get_config_proc(cd))
@@ -2750,6 +2765,13 @@ static int goodix_later_init_thread(void *data)
 		goto uninit_fw;
 	}
 	cd->init_stage = CORE_INIT_STAGE2;
+	if (kthread_should_stop())
+		return 0;
+	ret = goodix_rodin_register(cd);
+	if (ret) {
+		ts_err("common touch registration failed: %d", ret);
+		return ret;
+	}
 	ts_info("init_stage is %d", cd->init_stage);
 
 	return 0;
@@ -2770,13 +2792,16 @@ static int goodix_start_later_init(struct goodix_ts_core *ts_core)
 {
 	struct task_struct *init_thrd;
 	/* create and run update thread */
-	init_thrd = kthread_run(goodix_later_init_thread,
+	init_thrd = kthread_create(goodix_later_init_thread,
 				ts_core, "goodix_init_thread");
 	if (IS_ERR_OR_NULL(init_thrd)) {
 		ts_err("Failed to create update thread:%ld",
 		       PTR_ERR(init_thrd));
 		return -EFAULT;
 	}
+	get_task_struct(init_thrd);
+	ts_core->init_thread = init_thrd;
+	wake_up_process(init_thrd);
 	return 0;
 }
 static ssize_t goodix_lockdown_info_read(struct file *file, char __user *buf,
@@ -2867,7 +2892,7 @@ static ssize_t goodix_selftest_read(struct file *file, char __user *buf,
 	return cnt;
 }
 
-static int goodix_short_open_test(void)
+int goodix_short_open_test(void)
 {
 	struct ts_rawdata_info *info = NULL;
 	int test_result;
@@ -2957,48 +2982,12 @@ int goodix_ts_get_lockdown_info(struct goodix_ts_core *cd)
 	return 0;
 }
 
-static ssize_t fod_test_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	int value = 0;
-	struct goodix_ts_core *info = dev_get_drvdata(dev);
 
-	ts_info("%s,buf:%s,count:%zu\n", __func__, buf, count);
-	if (kstrtoint(buf, 10, &value))
-		return -EINVAL;
-	if (value) {
-		input_report_key(info->input_dev, BTN_INFO, 1);
-		update_fod_press_status(1);
-		/* mi_disp_set_fod_queue_work(1, true); */
-		input_sync(info->input_dev);
-		input_mt_slot(info->input_dev, 0);
-		input_mt_report_slot_state(info->input_dev, MT_TOOL_FINGER, 1);
-		input_report_key(info->input_dev, BTN_TOUCH, 1);
-		input_report_key(info->input_dev, BTN_TOOL_FINGER, 1);
-		input_report_abs(info->input_dev, ABS_MT_TRACKING_ID, 0);
-		input_report_abs(info->input_dev, ABS_MT_WIDTH_MINOR, 1);
-		input_report_abs(info->input_dev, ABS_MT_POSITION_X, 9744);
-		input_report_abs(info->input_dev, ABS_MT_POSITION_Y, 38992);
-		input_sync(info->input_dev);
-	} else {
-		input_mt_slot(info->input_dev, 0);
-		input_report_abs(info->input_dev, ABS_MT_WIDTH_MINOR, 0);
-		input_mt_report_slot_state(info->input_dev, MT_TOOL_FINGER, 0);
-		input_report_abs(info->input_dev, ABS_MT_TRACKING_ID, -1);
-		input_report_key(info->input_dev, BTN_INFO, 0);
-		update_fod_press_status(0);
-		/* mi_disp_set_fod_queue_work(0, true); */
-		input_sync(info->input_dev);
-	}
-	return count;
-}
-
-static DEVICE_ATTR_WO(fod_test);
 
 #ifdef GOODIX_XIAOMI_TOUCHFEATURE
 static struct xiaomi_touch_interface xiaomi_touch_interfaces;
 
-static void goodix_sleep_to_gesture(struct goodix_ts_core *cd)
+void goodix_sleep_to_gesture(struct goodix_ts_core *cd)
 {
 	int ret;
 	struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
@@ -4091,6 +4080,8 @@ static int goodix_ts_probe(struct platform_device *pdev)
 	struct goodix_bus_interface *bus_interface;
 	int ret;
 
+	if (!get_xiaomi_touch_class_common())
+		return -EPROBE_DEFER;
 	ts_info("%s : IN", __func__);
 
 	bus_interface = pdev->dev.platform_data;
@@ -4107,6 +4098,7 @@ static int goodix_ts_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 	goodix_core_data = core_data;
+	mutex_init(&core_data->core_mutex);
 	if (IS_ENABLED(CONFIG_OF) && bus_interface->dev->of_node) {
 		/* parse devicetree property */
 		ret = goodix_parse_dt(bus_interface->dev->of_node,
@@ -4174,20 +4166,8 @@ static int goodix_ts_probe(struct platform_device *pdev)
 	core_data->ts_notifier.notifier_call = goodix_generic_noti_callback;
 	goodix_ts_register_notifier(&core_data->ts_notifier);
 
-	/* Try start a thread to get config-bin info */
-	ret = goodix_start_later_init(core_data);
-	if (ret) {
-		ts_err("Failed start cfg_bin_proc, %d", ret);
-		goto err_out;
-	}
 	device_init_wakeup(core_data->bus->dev, 1);
 
-	core_data->tp_lockdown_info_proc =
-		proc_create("tp_lockdown_info", 0664, NULL, &goodix_lockdown_info_ops);
-	core_data->tp_fw_version_proc =
-		proc_create("tp_fw_version", 0664, NULL, &goodix_fw_version_info_ops);
-	core_data->tp_selftest_proc =
-		proc_create("tp_selftest", 0664, NULL, &goodix_selftest_ops);
 #ifdef GOODIX_DEBUGFS_ENABLE
 	core_data->debugfs = debugfs_create_dir("tp_debug", NULL);
 	if (core_data->debugfs) {
@@ -4197,25 +4177,7 @@ static int goodix_ts_probe(struct platform_device *pdev)
 	goodix_tpdebug_proc_init();
 #endif
 
-	if (core_data->goodix_tp_class == NULL) {
-#ifdef GOODIX_XIAOMI_TOUCHFEATURE
-		core_data->goodix_tp_class = get_xiaomi_touch_class();
-	#else
-		core_data->goodix_tp_class = class_create(THIS_MODULE, "touch");
-	#endif
-		if (core_data->goodix_tp_class) {
-			core_data->goodix_touch_dev = device_create(core_data->goodix_tp_class, NULL, 0x38, core_data, "tp_dev");
-			if (IS_ERR(core_data->goodix_touch_dev)) {
-				ts_err("Failed to create device !\n");
-				goto err_class_create;
-			}
-			dev_set_drvdata(core_data->goodix_touch_dev, core_data);
-			if (sysfs_create_file(&core_data->goodix_touch_dev->kobj, &dev_attr_fod_test.attr)) {
-				ts_err("Failed to create fod_test sysfs group!\n");
-				goto err_class_create;
-			}
-		}
-	}
+	core_data->goodix_tp_class = get_xiaomi_touch_class_common();
 
 #ifdef GOODIX_XIAOMI_TOUCHFEATURE
 	core_data->game_wq = alloc_workqueue("gtp-game-queue",
@@ -4258,12 +4220,11 @@ static int goodix_ts_probe(struct platform_device *pdev)
 	goodix_modules.core_data = core_data;
 	core_module_prob_sate = CORE_MODULE_PROB_SUCCESS;
 
+	ret = goodix_start_later_init(core_data);
+	if (ret)
+		goto err_out;
 	ts_info("goodix_ts_core probe success");
 	return 0;
-
-err_class_create:
-	class_destroy(core_data->goodix_tp_class);
-	core_data->goodix_tp_class = NULL;
 
 err_out:
 	core_data->init_stage = CORE_INIT_FAIL;
@@ -4284,6 +4245,24 @@ static int goodix_ts_remove(struct platform_device *pdev)
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
 	struct goodix_ts_esd *ts_esd = &core_data->ts_esd;
 
+	if (core_data->init_thread) {
+		kthread_stop(core_data->init_thread);
+		put_task_struct(core_data->init_thread);
+	}
+	if (core_data->common_registered)
+		xiaomi_touch_stop_panel_common(0);
+	if (core_data->scp_registered) {
+		xiaomi_touch_scp_unregister();
+		core_data->scp_registered = false;
+	}
+	if (core_data->init_stage >= CORE_INIT_STAGE2) {
+		hw_ops->irq_enable(core_data, false);
+		synchronize_irq(core_data->irq);
+	}
+	if (core_data->common_registered) {
+		unregister_touch_panel_common(0);
+		core_data->common_registered = false;
+	}
 	goodix_ts_unregister_notifier(&core_data->ts_notifier);
 	goodix_tools_exit();
 
@@ -4291,10 +4270,7 @@ static int goodix_ts_remove(struct platform_device *pdev)
 		gesture_module_exit();
 		inspect_module_exit();
 		hw_ops->irq_enable(core_data, false);
-#if defined(CONFIG_DRM)
-	if (mi_disp_unregister_client(&core_data->notifier))
-		ts_err("[MI_DISP]Error occurred while unregistering drm_notifier.");
-#endif
+
 #ifdef CONFIG_FB
 		/*fb_unregister_client(&core_data->fb_notifier);*/
 #endif
@@ -4303,6 +4279,18 @@ static int goodix_ts_remove(struct platform_device *pdev)
 			goodix_ts_esd_off(core_data);
 		goodix_ts_unregister_notifier(&ts_esd->esd_notifier);
 
+		cancel_work_sync(&core_data->self_check_work);
+		cancel_work_sync(&core_data->game_work);
+		cancel_work_sync(&core_data->gesture_work);
+		cancel_work_sync(&core_data->power_supply_work);
+		cancel_work_sync(&core_data->resume_work);
+		cancel_work_sync(&core_data->suspend_work);
+		if (core_data->event_wq)
+			destroy_workqueue(core_data->event_wq);
+		if (core_data->gesture_wq)
+			destroy_workqueue(core_data->gesture_wq);
+		if (core_data->game_wq)
+			destroy_workqueue(core_data->game_wq);
 		goodix_fw_update_uninit();
 		goodix_ts_input_dev_remove(core_data);
 		goodix_ts_pen_dev_remove(core_data);
@@ -4349,7 +4337,7 @@ static int __init goodix_ts_core_init(void)
         gpio_direction_input(DISP_ID_DET);
         gpio_a = gpio_get_value(DISP_ID_DET);
 
-	if(!gpio_a)
+	if (gpio_a == 1)
 		ts_info("TP is goodix 9916r");
 	else
 		return 0;
@@ -4361,7 +4349,10 @@ static int __init goodix_ts_core_init(void)
 		ts_err("failed add bus driver");
 		return ret;
 	}
-	return platform_driver_register(&goodix_ts_driver);
+	ret = platform_driver_register(&goodix_ts_driver);
+	if (ret)
+		goodix_spi_bus_exit();
+	return ret;
 }
 
 static void __exit goodix_ts_core_exit(void)

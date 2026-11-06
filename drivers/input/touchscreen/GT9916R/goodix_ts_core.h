@@ -79,7 +79,6 @@
 #define GTP_RESULT_INVALID				0
 #define GTP_RESULT_FAIL					1
 #define GTP_RESULT_PASS					2
-#define CONFIG_TOUCHSCREEN_GOODIX_BRL_SPI
 
 #define PANEL_ORIENTATION_DEGREE_0	0	/* normal portrait orientation */
 #define PANEL_ORIENTATION_DEGREE_90	1	/* anticlockwise 90 degrees */
@@ -364,6 +363,7 @@ struct goodix_ts_board_data {
 	unsigned int  irq_flags;
 
 	unsigned int swap_axis;
+	unsigned int super_resolution_factor;
 	unsigned int panel_max_x;
 	unsigned int panel_max_y;
 	unsigned int panel_max_w; /*major and minor*/
@@ -667,6 +667,16 @@ enum ts_work_stat {
 	TP_SLEEP,
 };
 struct goodix_ts_core {
+	bool common_registered;
+	bool scp_registered;
+	bool scp_mistouch_close;
+	bool raw_enabled;
+	bool self_config_enabled;
+	unsigned int self_config_pending;
+	u32 raw_debug_type;
+	u32 raw_debug_size;
+	u64 raw_frame_count;
+	struct task_struct *init_thread;
 	int init_stage;
 	struct platform_device *pdev;
 	struct goodix_fw_version fw_version;
@@ -846,11 +856,18 @@ struct goodix_ext_attribute {
 static struct goodix_ext_attribute ext_attr_##_name = \
 	__EXTMOD_ATTR(_name, _mode, _show, _store)
 
+static inline bool goodix_is_self_config_pair(u32 file_id, u32 ic_id)
+{
+	return (file_id == 0x653a5581 || file_id == 0x653a5610) &&
+	       (ic_id == 0x653a5581 || ic_id == 0x653a5610);
+}
+
 /* log macro */
 extern bool debug_log_flag;
-#define ts_info(fmt, arg...)	pr_info("[GTP-INF][%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
-#define	ts_err(fmt, arg...)		pr_err("[GTP-ERR][%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
-#define ts_debug(fmt, arg...)	{if (debug_log_flag) pr_info("[GTP-DBG][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); }
+extern unsigned int goodix_debug_log_level;
+#define ts_info(fmt, arg...) do { if (goodix_debug_log_level > 2) pr_info("[GTP-INF][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); } while (0)
+#define	ts_err(fmt, arg...) do { if (goodix_debug_log_level) pr_err("[GTP-ERR][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); } while (0)
+#define ts_debug(fmt, arg...)	{if (goodix_debug_log_level > 3 || debug_log_flag) pr_info("[GTP-DBG][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); }
 
 /*
  * get board data pointer
@@ -910,6 +927,14 @@ int goodix_do_fw_update(struct goodix_ic_config *ic_config, int mode);
 int goodix_get_ic_type(struct device_node *node);
 int gesture_module_init(void);
 void gesture_module_exit(void);
+int goodix_rodin_gesture(struct goodix_ts_core *cd);
+int goodix_short_open_test(void);
+int goodix_ts_irq_setup(struct goodix_ts_core *core_data);
+void goodix_sleep_to_gesture(struct goodix_ts_core *cd);
+int goodix_rodin_register(struct goodix_ts_core *cd);
+int goodix_rodin_read_frame(struct goodix_ts_core *cd);
+int goodix_ts_suspend(struct goodix_ts_core *cd);
+int goodix_ts_resume(struct goodix_ts_core *cd);
 int inspect_module_init(struct goodix_ts_core *core_data);
 void inspect_module_exit(void);
 int goodix_tools_init(void);

@@ -16,6 +16,7 @@
  *
  */
 #include "goodix_ts_core.h"
+#include "../xiaomi_touch/xiaomi_touch_scp.h"
 
 /* berlin_A SPI mode setting */
 #define GOODIX_SPI_MODE_REG			0xC900
@@ -184,64 +185,69 @@ static int brl_power_on(struct goodix_ts_core *cd, bool on)
 	ts_info("brl_power_on enter on is %d", on);
 
 	if (on) {
-		/* must guarantee iovdd enbaled before avdd */
-		if (iovdd_gpio > 0) {
+		if (iovdd_gpio > 0)
 			gpio_direction_output(iovdd_gpio, 1);
-			usleep_range(3000, 3100);
+		else if (cd->iovdd) {
+			ret = regulator_enable(cd->iovdd);
+			if (ret) {
+				ts_err("Failed to enable iovdd:%d", ret);
+				goto power_off;
+			}
+			ts_info("regulator enable iovdd success");
 		}
 
-		ret = regulator_enable(cd->iovdd);
-		if (ret) {
-			ts_err("Failed to enable iovdd:%d", ret);
-			return ret;
-		}
-		usleep_range(30000, 31000);
-		
+		usleep_range(5000, 5100); /* T1 means iovdd enbaled before avdd*/
 		if (avdd_gpio > 0) {
-			gpio_direction_output(avdd_gpio, 1);
-			usleep_range(15000, 15100);
+			ret = gpio_direction_output(avdd_gpio, 1);
+			ts_info("gpio[%d] set directionn return:%d", avdd_gpio, ret);
+			ts_info("gpio[%d] value is:%d", avdd_gpio, gpio_get_value(avdd_gpio));
+		} else if (cd->avdd) {
+			ret = regulator_enable(cd->avdd);
+			if (ret) {
+				ts_err("Failed to enable avdd:%d", ret);
+				goto power_off;
+			}
+			ts_info("regulator enable avdd success");
+			usleep_range(10000, 10100);
 		}
-        
-		ret = regulator_enable(cd->avdd);
-		if (ret) {
-			regulator_disable(cd->iovdd);
-			ts_err("Failed to enable avdd:%d", ret);
-			return ret;
-		}
-		
-		ts_info("regulator enable SUCCESS");
-		usleep_range(15000, 15100);
+
+		usleep_range(15000, 15100); /* T2 must longer than 10ms*/
 		gpio_direction_output(reset_gpio, 1);
 		ret = brl_reset_after(cd);
 		if (ret < 0) {
-			ts_err("reset_after process failed,ret=%d", ret);
-			gpio_direction_output(reset_gpio, 0);
-			return ret;
+			ts_err("reset_after process failed, ret = %d", ret);
+			goto power_off;
 		}
 		msleep(GOODIX_NORMAL_RESET_DELAY_MS);
-		ts_info("brl_power_on exit 11");
 		return 0;
 	}
-	/*power off process */
-	gpio_direction_output(reset_gpio, 0);
-	
-	if (iovdd_gpio > 0)
-		gpio_direction_output(iovdd_gpio, 0);
 
-	ret = regulator_disable(cd->iovdd);
-	if (ret)
-		ts_err("Failed to disable iovdd:%d", ret);
-	usleep_range(3000, 3100);
+power_off:
+	ts_info("tp power off");
+
+	/* RST→ [≥1ms] →AVDD/3.3V→ [≥0ms]→DVDD/1.8V */
+	gpio_direction_output(reset_gpio, 0);
+
+	usleep_range(1000, 1100);
 
 	if (avdd_gpio > 0)
 		gpio_direction_output(avdd_gpio, 0);
-    
-	ret = regulator_disable(cd->avdd);
-	if (ret)
-		ts_err("Failed to disable avdd:%d", ret);
-	
+	else if (cd->avdd) {
+		ret = regulator_disable(cd->avdd);
+		if (ret)
+			ts_err("Failed to disable avdd:%d", ret);
+	}
+
+	usleep_range(5000, 5100); /*Ensure power-off sequence avdd after iovdd*/
+	if (iovdd_gpio > 0)
+		gpio_direction_output(iovdd_gpio, 0);
+	else if (cd->iovdd) {
+		ret = regulator_disable(cd->iovdd);
+		if (ret < 0)
+			ts_err("Failed to disable iovdd:%d", ret);
+	}
+
 	usleep_range(10000, 11000);
-	ts_info("brl_power_on exit 22");
 	return ret;
 }
 
@@ -266,43 +272,15 @@ int brl_resume(struct goodix_ts_core *cd)
 #define GOODIX_GESTURE_CMD	0xA6
 int brl_gesture(struct goodix_ts_core *cd, int gesture_type)
 {
-	struct goodix_ts_cmd cmd;
-	int ret,retry;
+	struct goodix_ts_cmd cmd = { .cmd = GOODIX_GESTURE_CMD, .len = 6 };
 
-	cmd.cmd = GOODIX_GESTURE_CMD;
-	cmd.len = 6;
-	cmd.data[0] = 0x80;
-	cmd.data[1] = 0x10;
-
-	/*Delete all fingerprints. mode 11 does not deliver 0 for protection*/
-	if ((cd->fod_icon_status) || (cd->aod_status)) {
-		cmd.data[0] = 0x80;
-		cmd.data[1] = 0x00;
-	}
-	if (cd->double_wakeup) {
-		cmd.data[0] = 0x00;
-		cmd.data[1] = 0x10;
-	}
-	if ((cd->fod_icon_status || cd->aod_status) && (cd->double_wakeup)) {
-		cmd.data[0] = 0x00;
-		cmd.data[1] = 0x00;
-	}
-	ts_info("BRL cmd 0 is 0x%x", cmd.data[0]);
-	ts_info("BRL cmd 1 is 0x%x", cmd.data[1]);
-	/*Added resend gesture*/
-	retry = 0;
-	while (retry++ < GOODIX_CMD_RETRY)
-	{
-		ret = cd->hw_ops->send_cmd(cd,&cmd);
-		if(ret){
-			usleep_range(5000,5100);
-			ts_err("failed to send gesture cmd,retry = %d",retry);
-		} else {
-			break;
-		}
-	}
-
-	return 0;
+	cmd.data[0] = gesture_type & 2 ? 0x7f : 0xff;
+	cmd.data[1] = 0xff;
+	if (gesture_type & 1)
+		cmd.data[1] &= ~0x10;
+	if (gesture_type & 4)
+		cmd.data[1] &= ~0x20;
+	return cd->hw_ops->send_cmd(cd, &cmd);
 }
 
 static int brl_dev_confirm(struct goodix_ts_core *cd)
@@ -316,11 +294,9 @@ static int brl_dev_confirm(struct goodix_ts_core *cd)
 	memset(tx_buf, DEV_CONFIRM_VAL, sizeof(tx_buf));
 	while (retry--) {
 		ret = hw_ops->write(cd, BOOTOPTION_ADDR, tx_buf, sizeof(tx_buf));
-		ts_info("device confirm failed, tx_buf:%*ph", 8, tx_buf);
 		if (ret < 0)
 			return ret;
 		ret = hw_ops->read(cd, BOOTOPTION_ADDR, rx_buf, sizeof(rx_buf));
-		ts_info("device confirm failed, rx_buf:%*ph", 8, rx_buf);
 		if (ret < 0)
 			return ret;
 		if (!memcmp(tx_buf, rx_buf, sizeof(tx_buf)))
@@ -373,6 +349,8 @@ static int brl_read(struct goodix_ts_core *cd, unsigned int addr,
 {
 	struct goodix_bus_interface *bus = cd->bus;
 
+	if (xiaomi_touch_scp_owned())
+		return xiaomi_touch_scp_read(addr, data, len);
 	return bus->read(bus->dev, addr, data, len);
 }
 
@@ -381,6 +359,8 @@ static int brl_write(struct goodix_ts_core *cd, unsigned int addr,
 {
 	struct goodix_bus_interface *bus = cd->bus;
 
+	if (xiaomi_touch_scp_owned())
+		return -EHOSTDOWN;
 	return bus->write(bus->dev, addr, data, len);
 }
 
@@ -1414,10 +1394,17 @@ static int goodix_touch_handler(struct goodix_ts_core *cd,
 static int brl_event_handler(struct goodix_ts_core *cd,
 			 struct goodix_ts_event *ts_event)
 {
+	if (READ_ONCE(cd->raw_enabled) && !atomic_read(&cd->suspended)) {
+		int raw_ret = goodix_rodin_read_frame(cd);
+
+		ts_event->event_type = 0;
+		return raw_ret;
+	}
+
 	struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
 	struct goodix_ic_info_misc *misc = &cd->ic_info.misc;
 	int pre_read_len;
-	u8 pre_buf[32];
+	u8 pre_buf[32] = { 0 };
 	u8 event_status;
 	u8 large_touch_status;
 	int ret;
@@ -1499,8 +1486,10 @@ static int brl_after_event_handler(struct goodix_ts_core *cd)
 	struct goodix_ic_info_misc *misc = &cd->ic_info.misc;
 	u8 sync_clean = 0;
 
-	return hw_ops->write(cd, misc->touch_data_addr,
-		&sync_clean, 1);
+	if (xiaomi_touch_scp_owned())
+		return 0;
+	return hw_ops->write(cd, cd->raw_enabled && !atomic_read(&cd->suspended) ?
+		misc->frame_data_addr : misc->touch_data_addr, &sync_clean, 1);
 }
 
 unsigned char frame_buf_data[FRAME_DATA_MAX_LEN];
@@ -1608,10 +1597,23 @@ static int brld_get_cap_data(struct goodix_ts_core *cd,
 	goodix_rotate_abcd2cbad(tx, rx, &info->buff[info->used_size]);
 	info->used_size += size;
 
+	temp_cmd.cmd = 0x90;
+	temp_cmd.data[0] = 0x83;
+	temp_cmd.len = 5;
+	ret = brl_send_cmd(cd, &temp_cmd);
+	if (ret < 0)
+		goto exit;
+	ret = brld_get_framedata(cd, info);
+	if (ret < 0)
+		goto exit;
+	goodix_rotate_abcd2cbad(tx, rx, &info->buff[info->used_size]);
+	info->used_size += size;
+
 exit:
 	temp_cmd.cmd = 0x90;
-	temp_cmd.data[0] = 0;
-	temp_cmd.len = 5;
+	temp_cmd.data[0] = 1;
+	temp_cmd.data[1] = 1;
+	temp_cmd.len = 6;
 	brl_send_cmd(cd, &temp_cmd);
 	/* enable irq & esd */
 	brl_irq_enbale(cd, true);
@@ -1630,12 +1632,14 @@ static int brl_get_capacitance_data(struct goodix_ts_core *cd,
 	u32 flag_addr = cd->ic_info.misc.touch_data_addr;
 	u32 raw_addr = cd->ic_info.misc.mutual_rawdata_addr;
 	u32 diff_addr = cd->ic_info.misc.mutual_diffdata_addr;
+	u32 ref_addr = cd->ic_info.misc.mutual_refdata_addr;
 	int tx = cd->ic_info.parm.drv_num;
 	int rx = cd->ic_info.parm.sen_num;
 	int size = tx * rx;
 	u8 val;
 
-	if (!info) {
+	if (!info || tx <= 0 || rx <= 0 ||
+	    size > (TS_RAWDATA_BUFF_MAX - 2) / 3) {
 		ts_err("input null ptr");
 		return -EIO;
 	}
@@ -1672,6 +1676,7 @@ static int brl_get_capacitance_data(struct goodix_ts_core *cd,
 	}
 	if (retry < 0) {
 		ts_err("rawdata is not ready val:0x%02x, exit!", val);
+		ret = -ETIMEDOUT;
 		goto exit;
 	}
 
@@ -1695,6 +1700,13 @@ static int brl_get_capacitance_data(struct goodix_ts_core *cd,
 		ts_err("obtian diff_data failed, exit!");
 		goto exit;
 	}
+	goodix_rotate_abcd2cbad(tx, rx, &info->buff[info->used_size]);
+	info->used_size += size;
+
+	ret = brl_read(cd, ref_addr, (u8 *)&info->buff[info->used_size],
+			size * sizeof(s16));
+	if (ret < 0)
+		goto exit;
 	goodix_rotate_abcd2cbad(tx, rx, &info->buff[info->used_size]);
 	info->used_size += size;
 
@@ -1881,51 +1893,18 @@ int brl_Edge_suppression(struct goodix_ts_core *cd)
 
 int brl_game(struct goodix_ts_core *cd, u8 data0, u8 data1)
 {
-	struct goodix_ts_cmd cmd;
-    int ret;
-	int retry = 0;
+	struct goodix_ts_cmd cmd = {
+		.cmd = cd->gamemode_enabled ? 0x17 : 0x18,
+		.len = 6, .data = { data0, data1 },
+	};
+	int ret = cd->hw_ops->send_cmd(cd, &cmd);
 
-	if (cd->gamemode_enabled){
-		mutex_lock(&cd->edge_data_mutex);
-		cmd.cmd = GOODIX_GAME_CMD;
-		cmd.len = 6;
-		cmd.data[0] = data0;
-		cmd.data[1] = data1;
-		if (cd->hw_ops->send_cmd(cd, &cmd)) {
-			ts_err("failed send game cmd, data0 = 0x%x, data1 = 0x%x", data0, data1);
-			mutex_unlock(&cd->edge_data_mutex);
-			return -EINVAL;
-		}else {
-			ts_info("game data0:0x%x, data1:0x%x, gamemode_enabled = %d", data0, data1, cd->gamemode_enabled);
-			ret = wait_cmd_status(cd, CONFIG_CMD_STATUS_PASS,12);
-			if(!ret){
-					while (retry++ < GOODIX_CMD_RETRY) {
-						ret = brl_send_Edge_data(cd);
-						if (!ret)
-							break;
-					}
-					cmd.cmd = 0x29;
-					cmd.len = 5;
-					cmd.data[0] = 1;
-					if (cd->hw_ops->send_cmd(cd, &cmd)) {
-						ts_err("failed send game idle cmd, data0 = %d", cmd.data[0]);
-						mutex_unlock(&cd->edge_data_mutex);
-						return -EINVAL;
-					}
-					else
-					ts_info("success send game idle mode");
-
-			}else {
-					ts_err("wait_cmd_status failed");
-			}
-			mutex_unlock(&cd->edge_data_mutex);
-		}
-
-	}else {
-		ts_info("enter brl edge normal");
-	}
+	if (ret)
+		return -EINVAL;
+	touch_irq_boost_switch(0, cd->gamemode_enabled);
 	return 0;
 }
+
 #endif
 
 static int brl_get_frame_data(struct goodix_ts_core *cd, struct ts_framedata *info)

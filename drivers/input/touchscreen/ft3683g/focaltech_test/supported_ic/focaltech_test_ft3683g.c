@@ -2679,7 +2679,7 @@ out:
 }
 
 struct test_funcs test_func_ft5672 = {
-    .ctype = {0x90},
+    .ctype = {0x90, 0x92},
     .hwtype = IC_HW_MC_SC,
     .key_num_total = 0,
     .mc_sc_short_v2 = true,

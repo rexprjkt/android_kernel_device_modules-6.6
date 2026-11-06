@@ -269,53 +269,35 @@ fw_reset:
 
 int fts_read_lockdown_info(u8 *buf)
 {
-	u32 lockdown_addr = 0x3F000;
-	int ret = 0;
-	u8 lockdown_info[0x20] = {0};
-	int i = 0;
-	int count = 0;
-	
-	fts_flash_read(lockdown_addr, lockdown_info, sizeof(lockdown_info));
-	if (ret < 0) {
-    	FTS_ERROR("fail to get vendor id from tp");
-    	return ret;
-	}
+	u8 lockdown[8];
+	int ret, i, count = 0;
 
-	for(i = 0; i < 8; i++) {
-		count += sprintf(buf + count, " %02x ", lockdown_info[i]);
-	}
-
-	FTS_INFO("read lockdown info: %s\n", lockdown_info);
-	FTS_INFO("read lockdown info: %s\n", buf);
-	//memcpy(buf, lockdown_info, sizeof(lockdown_info));
-
+	if (!buf)
+		return -EINVAL;
+	ret = fts_read_lockdown_info_proc(lockdown);
+	if (ret < 0)
+		return ret;
+	for (i = 0; i < sizeof(lockdown); i++)
+		count += scnprintf(buf + count, 256 - count, " %02x ", lockdown[i]);
 	return 0;
 }
 
 int fts_read_lockdown_info_proc(u8 *buf)
 {
-	u32 lockdown_addr = 0x3F000;
-	int ret = 0;
-	u8 lockdown_info[0x20] = {0};
-	int i = 0;
-	int count = 0;
+	u8 lockdown[8];
+	int ret;
 
-	ret = fts_flash_read(lockdown_addr, lockdown_info, sizeof(lockdown_info));
-	if (ret < 0) {
-		FTS_ERROR("fail to get vendor id from tp");
+	if (!buf)
+		return -EINVAL;
+	ret = fts_flash_read(0x1f800, lockdown, sizeof(lockdown));
+	if (ret < 0)
 		return ret;
-	}
-
-	for(i = 0; i < 8; i++) {
-		count += sprintf(buf + count, "%c", lockdown_info[i]);
-	}
-	/*memcpy(buf, lockdown_info, sizeof(lockdown_info));*/
-	FTS_INFO("read lockdown info: %s\n", buf);
+	memcpy(buf, lockdown, sizeof(lockdown));
 	return 0;
 }
 
 struct upgrade_func upgrade_func_ft5008 = {
-    .ctype = {0x90},
+    .ctype = {0x90, 0x92},
     .fwveroff = 0x010E,
     .fwcfgoff = 0x1F80,
     .appoff = 0x0000,

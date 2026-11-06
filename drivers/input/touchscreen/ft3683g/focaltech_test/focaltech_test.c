@@ -2270,6 +2270,37 @@ static ssize_t tp_selftest_read(struct file *file, char __user *buf, size_t coun
 	*pos += cnt;
 	return cnt;
 }
+int fts_rodin_self_test(const char *command, int *result)
+{
+	struct fts_test *tdata = fts_ftest;
+	int ret;
+
+	if (!fts_data || fts_data->suspended || !tdata || !tdata->func)
+		return -EINVAL;
+	mutex_lock(&fts_data->input_dev->mutex);
+	fts_irq_disable();
+	*result = SELFTEST_INVALID;
+	ret = fts_test_main_init();
+	if (ret < 0)
+		goto out;
+	ret = fts_test_get_testparams("Conf_MultipleTest.ini");
+	if (!ret) {
+		if (!strncmp(command, "short", 5) && tdata->func->short_test)
+			*result = tdata->func->short_test();
+		else if (!strncmp(command, "open", 4) && tdata->func->open_test)
+			*result = tdata->func->open_test();
+		else if (!strncmp(command, "i2c", 3) && tdata->func->spi_test)
+			*result = tdata->func->spi_test();
+	}
+	fts_test_main_exit();
+	fts_free_test_memory();
+	enter_work_mode();
+out:
+	fts_irq_enable();
+	mutex_unlock(&fts_data->input_dev->mutex);
+	return ret;
+}
+
 ssize_t tp_selftest_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
 {
 	char tmp[6];
@@ -2342,121 +2373,65 @@ static const struct proc_ops tp_selftest_fops = {
 	.proc_write = tp_selftest_write,
 	.proc_release = tp_selftest_release,
 };
-static int32_t datadump_show(struct seq_file *m, void *v)
+int fts_rodin_collect(char *output, int *length)
 {
-	int ret = 0, i = 0, j = 0;
-	int *rawdata = NULL;
-	int *differ_data = NULL;
 	struct fts_test *tdata = fts_ftest;
-	struct fts_ts_data *ts_data = fts_data;
-	struct input_dev *input_dev;
-	input_dev = ts_data->input_dev;
-	FTS_TEST_FUNC_ENTER();
-	if (ts_data->suspended) {
-		FTS_INFO("In suspend, no test, return now");
-		ret = -EINVAL;
-		goto out;
-	}
-	rawdata = vmalloc(PAGE_SIZE * 2);
-	if (!rawdata) {
+	struct fts_ts_data *ts = fts_data;
+	int *raw, *diff, ret, i, j, set, used = 0;
+
+	if (!ts || !tdata || !output || !length || ts->suspended)
+		return -EINVAL;
+	*length = 0;
+	raw = vzalloc(2 * PAGE_SIZE);
+	diff = vzalloc(2 * PAGE_SIZE);
+	if (!raw || !diff) {
 		ret = -ENOMEM;
-		goto out;
+		goto free;
 	}
-	memset(rawdata, 0, PAGE_SIZE * 2);
-	differ_data = vmalloc(PAGE_SIZE * 2);
-	if (!differ_data) {
-		ret = -ENOMEM;
-		goto out;
-	}
-	memset(differ_data, 0, PAGE_SIZE * 2);
-	mutex_lock(&input_dev->mutex);
+	mutex_lock(&ts->input_dev->mutex);
 	fts_irq_disable();
-	/* before enter factory mode, disable auto calibration */
-	ret = fts_test_write_reg(0xEE, 0x01);
-	if (ret) {
-		FTS_TEST_ERROR("write data auto cal fail\n");
-		ret = -EFAULT;
-		goto out;
-	}
+	ret = fts_test_write_reg(0xee, 1);
+	if (ret < 0)
+		goto restore;
 	ret = fts_test_init_basicinfo(tdata);
-	if (ret < 0) {
-		FTS_TEST_ERROR("test init basicinfo fail");
-		ret = -EFAULT;
-		goto out;
+	if (ret < 0)
+		goto restore;
+	if (tdata->node.tx_num <= 0 || tdata->node.rx_num <= 0 ||
+	    tdata->node.tx_num > TX_NUM_MAX || tdata->node.rx_num > RX_NUM_MAX ||
+	    tdata->node.tx_num * tdata->node.rx_num > 2 * PAGE_SIZE / sizeof(int)) {
+		ret = -EOVERFLOW;
+		goto restore;
 	}
-	/*********************GET RAWDATA*********************/
-	if (tdata->func->data_dump) {
-		ret = tdata->func->data_dump(rawdata, differ_data);
-		if (ret) {
-			FTS_TEST_ERROR("get rawdata error");
-			ret = -EFAULT;
-			goto out;
+	if (!tdata->func->data_dump) {
+		ret = -EOPNOTSUPP;
+		goto restore;
+	}
+	ret = tdata->func->data_dump(raw, diff);
+	if (ret)
+		goto restore;
+	for (set = 0; set < 2; set++) {
+		int *data = set ? diff : raw;
+
+		used += scnprintf(output + used, 3 * PAGE_SIZE - used,
+				  set ? "\nDIFF DATA\n" : "\nRAW DATA\n");
+		for (i = 0; i < tdata->node.tx_num; i++) {
+			for (j = 0; j < tdata->node.rx_num; j++)
+				used += scnprintf(output + used, 3 * PAGE_SIZE - used,
+					"%6d", data[tdata->node.rx_num * i + j]);
+			used += scnprintf(output + used, 3 * PAGE_SIZE - used, "\n");
 		}
 	}
-	FTS_TEST_INFO("tx num:%d,rx num:%d\n", tdata->node.tx_num, tdata->node.rx_num);
-	seq_puts(m, "\nRAW DATA\n");
-	for (i = 0; (i < tdata->node.tx_num) && (i < TX_NUM_MAX); i++) {
-		for (j = 0; (j < tdata->node.rx_num) && (j < RX_NUM_MAX); j++) {
-			seq_printf(m, "%6d", rawdata[tdata->node.rx_num * i + j]);
-			if (j == (tdata->node.rx_num - 1))
-				seq_puts(m, "\n");
-		}
-	}
-	seq_puts(m, "\nDIFF DATA\n");
-	for (i = 0; (i < tdata->node.tx_num) && (i < TX_NUM_MAX); i++) {
-		for (j = 0; (j < tdata->node.rx_num) && (j < RX_NUM_MAX); j++) {
-			seq_printf(m, "%6d", differ_data[tdata->node.rx_num * i + j]);
-			if (j == (tdata->node.rx_num - 1))
-				seq_puts(m, "\n");
-		}
-	}
-	seq_puts(m, "\n\n");
-	ret = 0;
-out:
+	used += scnprintf(output + used, 3 * PAGE_SIZE - used, "\n\n");
+	*length = used;
+restore:
 	enter_work_mode();
 	fts_irq_enable();
-	mutex_unlock(&input_dev->mutex);
-	if (rawdata) {
-		vfree(rawdata);
-		rawdata = NULL;
-	}
-	if (differ_data) {
-		vfree(differ_data);
-		differ_data = NULL;
-	}
-	FTS_TEST_FUNC_EXIT();
+	mutex_unlock(&ts->input_dev->mutex);
+free:
+	vfree(raw);
+	vfree(diff);
 	return ret;
 }
-static void *datadump_start(struct seq_file *m, loff_t *pos)
-{
-	return *pos < 1 ? (void *)1 : NULL;
-}
-static void *datadump_next(struct seq_file *m, void *v, loff_t *pos)
-{
-	++*pos;
-	return NULL;
-}
-static void datadump_stop(struct seq_file *m, void *v)
-{
-}
-const struct seq_operations tp_datadump_seq_ops = {
-	.start = datadump_start,
-	.next = datadump_next,
-	.stop = datadump_stop,
-	.show = datadump_show,
-};
-static int32_t tp_datadump_open(struct inode *inode, struct file *file)
-{
-	return seq_open(file, &tp_datadump_seq_ops);
-}
-
-static const struct proc_ops tp_datadump_fops = {
-	/*.proc_owner = THIS_MODULE,*/
-	.proc_open = tp_datadump_open,
-	.proc_read = seq_read,
-	.proc_lseek = seq_lseek,
-	.proc_release = seq_release,
-};
 
 /*/proc/fts_test_csv*/
 static int fts_csv_show(struct seq_file *s, void *v)
@@ -2551,7 +2526,6 @@ static int fts_test_func_init(struct fts_ts_data *ts_data)
 int fts_test_init(struct fts_ts_data *ts_data)
 {
 	int ret = 0;
-	struct ftxxxx_proc *proc = &ts_data->proc;
 	FTS_TEST_FUNC_ENTER();
 	/* get test function, must be the first step */
 	ret = fts_test_func_init(ts_data);
@@ -2571,12 +2545,6 @@ int fts_test_init(struct fts_ts_data *ts_data)
         FTS_ERROR("create proc_csv entry fail");
     }
 
-	proc->tp_selftest_proc = proc_create("tp_selftest", 0644, NULL, &tp_selftest_fops);
-	if (proc->tp_selftest_proc == NULL)
-		FTS_TEST_ERROR("tp_selftest proc create failed.");
-	proc->tp_data_dump_proc = proc_create("tp_data_dump", 0444, NULL, &tp_datadump_fops);
-	if (proc->tp_data_dump_proc == NULL)
-		FTS_TEST_ERROR("tp_data_dump proc create failed.");
 	FTS_TEST_FUNC_EXIT();
 	return ret;
 }

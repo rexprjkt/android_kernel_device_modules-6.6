@@ -13,7 +13,9 @@
 #if TOUCHSCREEN_GOODIX_BRL
 
 config TOUCHSCREEN_GOODIX_BRL_SPI
-	bool "enable SPI connection" 
+	tristate "Goodix GT9916R SPI touchscreen"
+	depends on SPI
+	select TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON
 	help
 		Say Y here if the touchscreen is connected via SPI bus.
 

@@ -4,6 +4,7 @@ ccflags-$(CONFIG_TOUCHSCREEN_MTK_TOUCH) += -I$(DEVICE_MODULES_PATH)/drivers/inpu
 obj-m := focaltech_touch_rodin.o
 
 focaltech_touch_rodin-y := \
+	focaltech_rodin.o \
 	focaltech_core.o \
 	focaltech_ex_fun.o \
 	focaltech_ex_mode.o \

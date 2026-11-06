@@ -28,13 +28,14 @@
 #include <linux/atomic.h>
 #include <linux/input/mt.h>
 #include "goodix_ts_core.h"
+#include "../xiaomi_touch/xiaomi_touch_scp.h"
+#include <asm/unaligned.h>
 
 #define QUERYBIT(longlong, bit) (!!(longlong[bit/8] & (1 << bit%8)))
 
 #define GSX_GESTURE_TYPE_LEN	32
 #define TYPE_B_PROTOCOL
 
-static int  FP_Event_Gesture;
 
 /*
  * struct gesture_module - gesture module data
@@ -227,122 +228,85 @@ static int gsx_gesture_exit(struct goodix_ts_core *cd,
 static int gsx_gesture_ist(struct goodix_ts_core *cd,
 	struct goodix_ext_module *module)
 {
-	struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
-	struct goodix_ts_event gs_event = {0};
+	const struct goodix_ts_hw_ops *ops = cd->hw_ops;
+	struct input_dev *input = cd->input_dev;
+	u8 data[32] = { 0 };
+	unsigned int id, key = 0;
 	int ret;
-	int key_value;
-	unsigned int fodx, fody, fod_id;
-	unsigned int overlay_area;
-	u8 gesture_data[32];
 
-	if (atomic_read(&cd->suspended) == 0)
+	if (!atomic_read(&cd->suspended))
 		return EVT_CONTINUE;
-
 	mutex_lock(&cd->report_mutex);
-
-	ret = hw_ops->event_handler(cd, &gs_event);
-	if (ret) {
-		ts_err("failed get gesture data");
-		goto re_send_ges_cmd;
+	ret = ops->read(cd, cd->ic_info.misc.touch_data_addr, data, sizeof(data));
+	if (ret)
+		goto retry;
+	if (checksum_cmp(data, 8, CHECKSUM_MODE_U8_LE)) {
+		if (data[4] != 0x55 || data[0])
+			goto retry;
+	} else if (!(data[0] & BIT(5))) {
+		goto retry;
 	}
-
-	if (!(gs_event.event_type & EVENT_GESTURE)) {
-		ts_err("invalid event type: 0x%x",
-			cd->ts_event.event_type);
-		goto re_send_ges_cmd;
-	}
-
-	memcpy(gesture_data, gs_event.touch_data.tmp_data, 32*sizeof(u8));
-	if ((gesture_data[0] & 0x08)  != 0)
-		FP_Event_Gesture = 1;
-
-	fod_id = gesture_data[17];
-	/*避免未使用指纹解锁但是使用AOD或者双击唤醒功能在灭屏时报FOD事件*/
-	if ((cd->fod_status != 0 && cd->fod_status != -1) && (FP_Event_Gesture == 1) &&
-		(gs_event.gesture_type == 0x46) &&
-		(cd->nonui_status != 2)) {
-		fodx = gesture_data[8] | (gesture_data[9] << 8);
-		fody = gesture_data[10] | (gesture_data[11] << 8);
-		overlay_area = gesture_data[12];
-		ts_info("gesture coordinate fodx:0x%x, fody:0x%x, overlay_area:0x%x",
-			    fodx, fody, overlay_area);
-		ts_info("fod down");
-			input_report_key(cd->input_dev, BTN_INFO, 1);
-			input_sync(cd->input_dev);
-#ifdef TYPE_B_PROTOCOL
-			input_mt_slot(cd->input_dev, fod_id);
-			ts_info("fod id:%d", fod_id);
-			input_mt_report_slot_state(cd->input_dev,
-					MT_TOOL_FINGER, 1);
-#endif
-			input_report_key(cd->input_dev, BTN_TOUCH, 1);
-			input_report_key(cd->input_dev, BTN_TOOL_FINGER, 1);
-			input_report_abs(cd->input_dev, ABS_MT_POSITION_X, fodx);
-			input_report_abs(cd->input_dev, ABS_MT_POSITION_Y, fody);
-			input_report_abs(cd->input_dev, ABS_MT_WIDTH_MAJOR, overlay_area);
-			input_report_abs(cd->input_dev, ABS_MT_WIDTH_MINOR, overlay_area);
-			input_sync(cd->input_dev);
-			/* mi_disp_set_fod_queue_work(1, true); */
-			cd->fod_finger = true;
-			update_fod_press_status(1);
-			FP_Event_Gesture = 0;
-			goto gesture_ist_exit;
-	}
-	if  ((FP_Event_Gesture == 1) && (gs_event.gesture_type == 0x55)) {
+	id = data[17];
+	if (id >= GOODIX_MAX_TOUCH)
+		goto retry;
+	switch (data[4]) {
+	case 0x46:
+		if (!(cd->gesture_enabled & 4))
+			goto retry;
+		input_report_key(input, BTN_INFO, 1);
+		input_sync(input);
+		input_mt_slot(input, id);
+		input_mt_report_slot_state(input, MT_TOOL_FINGER, true);
+		input_report_key(input, BTN_TOUCH, 1);
+		input_report_key(input, BTN_TOOL_FINGER, 1);
+		input_report_abs(input, ABS_MT_POSITION_X,
+			get_unaligned_le16(data + 8) * cd->board_data.super_resolution_factor);
+		input_report_abs(input, ABS_MT_POSITION_Y,
+			get_unaligned_le16(data + 10) * cd->board_data.super_resolution_factor);
+		input_report_abs(input, ABS_MT_WIDTH_MAJOR, data[12]);
+		input_report_abs(input, ABS_MT_WIDTH_MINOR, data[12]);
+		input_sync(input);
+		cd->fod_finger = true;
+		update_fod_press_status_common(1);
+		goto out;
+	case 0x55:
+		if (!(cd->gesture_enabled & 4) &&
+		    driver_get_touch_mode_common(0, Touch_Nonui_Mode) != 2)
+			goto retry;
 		if (cd->fod_finger) {
 			cd->fod_finger = false;
-			ts_info("fod finger is %d", cd->fod_finger);
-			ts_info("fod up");
-			input_report_key(cd->input_dev, BTN_INFO, 0);
-			input_report_abs(cd->input_dev, ABS_MT_WIDTH_MAJOR, 0);
-			input_report_abs(cd->input_dev, ABS_MT_WIDTH_MINOR, 0);
-			input_sync(cd->input_dev);
-#ifdef TYPE_B_PROTOCOL
-			input_mt_slot(cd->input_dev, fod_id);
-			ts_info("fod id:%d", fod_id);
-			input_mt_report_slot_state(cd->input_dev,
-					MT_TOOL_FINGER, 0);
-#endif
-			input_report_key(cd->input_dev, BTN_TOUCH, 0);
-			input_report_key(cd->input_dev, BTN_TOOL_FINGER, 0);
-			input_sync(cd->input_dev);
-			update_fod_press_status(0);
-			/* mi_disp_set_fod_queue_work(0, true); */
+			input_report_key(input, BTN_INFO, 0);
+			input_report_abs(input, ABS_MT_WIDTH_MAJOR, 0);
+			input_report_abs(input, ABS_MT_WIDTH_MINOR, 0);
+			input_sync(input);
+			input_mt_slot(input, id);
+			input_mt_report_slot_state(input, MT_TOOL_FINGER, false);
+			input_report_key(input, BTN_TOUCH, 0);
+			input_report_key(input, BTN_TOOL_FINGER, 0);
+			input_sync(input);
+			update_fod_press_status_common(0);
 		}
-		goto gesture_ist_exit;
+		goto out;
+	case 0xcc:
+		if (cd->gesture_enabled & 2)
+			key = KEY_WAKEUP;
+		break;
+	case 0x4c:
+		if (cd->gesture_enabled & 1)
+			key = KEY_GOTO;
+		break;
 	}
-	if (QUERYBIT(gsx_gesture->gesture_type, gs_event.gesture_type)) {
-		gsx_gesture->gesture_data = gs_event.gesture_type;
-		/* do resume routine */
-		ts_info("GTP got valid gesture type 0x%x", gs_event.gesture_type);
-		if (cd->double_wakeup && gs_event.gesture_type == 0xcc && cd->nonui_status != 2) {
-			ts_info("GTP gesture report double tap");
-			key_value = KEY_WAKEUP;
-		}
-		if (((cd->fod_icon_status && (cd->fod_status != 0 && cd->fod_status != -1)) || cd->aod_status) &&
-				cd->nonui_status == 0 &&
-				gs_event.gesture_type == 0x4c) {
-			ts_info("GTP gesture report single tap");
-			key_value = KEY_GOTO;
-		}
-		input_report_key(cd->input_dev, key_value, 1);
-		input_sync(cd->input_dev);
-		input_report_key(cd->input_dev, key_value, 0);
-		input_sync(cd->input_dev);
-		goto re_send_ges_cmd;
-	} else {
-		ts_info("unsupported gesture:%x", gs_event.gesture_type);
+	if (key) {
+		input_report_key(input, key, 1);
+		input_sync(input);
+		input_report_key(input, key, 0);
+		input_sync(input);
 	}
-
-re_send_ges_cmd:
-	if (hw_ops->gesture(cd, 0))
-		ts_info("warning: failed re_send gesture cmd");
-gesture_ist_exit:   /*尽量避免fod down和up间隔短的时候因为一边重复下发手势模式一边接受fod up而导致的touch head check sum error*/
-	if (!cd->tools_ctrl_sync)
-		hw_ops->after_event_handler(cd);
-
+retry:
+	if (!xiaomi_touch_scp_owned())
+		ops->gesture(cd, cd->gesture_enabled);
+out:
 	mutex_unlock(&cd->report_mutex);
-
 	return EVT_CANCEL_IRQEVT;
 }
 
@@ -354,11 +318,21 @@ gesture_ist_exit:   /*尽量避免fod down和up间隔短的时候因为一边重
  * @module: pointer to goodix_ext_module struct
  * return: 0 goon execute, EVT_IRQCANCLED  stop execute
  */
+int goodix_rodin_gesture(struct goodix_ts_core *cd)
+{
+	if (!gsx_gesture)
+		return -ENODEV;
+	return gsx_gesture_ist(cd, &gsx_gesture->module);
+}
+
 static int gsx_gesture_before_suspend(struct goodix_ts_core *cd,
 	struct goodix_ext_module *module)
 {
 	int ret;
 	const struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
+
+	if (!cd->gesture_enabled)
+		return EVT_CONTINUE;
 
 	ret = hw_ops->gesture(cd, cd->gesture_enabled);
 	if (ret)
@@ -376,6 +350,9 @@ static int gsx_gesture_before_resume(struct goodix_ts_core *cd,
 	struct goodix_ext_module *module)
 {
 	const struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
+
+	if (cd->work_status != TP_GESTURE)
+		return EVT_CONTINUE;
 
 	hw_ops->irq_enable(cd, false);
 	disable_irq_wake(cd->irq);

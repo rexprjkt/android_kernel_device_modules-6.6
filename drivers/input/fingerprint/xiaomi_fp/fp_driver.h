@@ -136,6 +136,10 @@ struct fp_device {
 	struct input_dev *input;
 	struct notifier_block notifier;
 	char device_available;
+	bool ready;
+	bool irq_requested;
+	bool regulator_enabled;
+	unsigned int users;
 	char fb_black;
 	char wait_finger_down;
 	u_int32_t  netlink_num;
@@ -169,8 +173,8 @@ int netlink_destroy(struct fp_device *fp_dev);
 /*fp_platform function refererce */
 int  fp_parse_dts(struct fp_device *fp_dev);
 int  fp_power_config(struct fp_device *fp_dev);
-void fp_power_on(struct fp_device *fp_dev);
-void fp_power_off(struct fp_device *fp_dev);
+int fp_power_on(struct fp_device *fp_dev);
+int fp_power_off(struct fp_device *fp_dev);
 void fp_hw_reset(struct fp_device *fp_dev, u8 delay);
 void fp_enable_irq(struct fp_device *fp_dev);
 void fp_disable_irq(struct fp_device *fp_dev);
