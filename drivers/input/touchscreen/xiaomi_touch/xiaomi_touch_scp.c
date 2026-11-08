@@ -153,6 +153,13 @@ int xiaomi_touch_scp_register(struct device *dev, struct pinctrl *pinctrl,
 		ret = -ENOENT;
 		goto out;
 	}
+	pinctrl_select_state(pinctrl, touch_scp.ap_mode);
+
+	if (scp_is_recovery_boot()) {
+		pr_notice("[xiaomi_touch_scp] Recovery mode detected: keeping AP touch mode, skipping SCP registration\n");
+		ret = -ENODEV;
+		goto out;
+	}
 	touch_scp.physical = scp_get_reserve_mem_phys(SCP_THP_MEM_ID);
 	touch_scp.shared = (void *)(unsigned long)scp_get_reserve_mem_virt(SCP_THP_MEM_ID);
 	touch_scp.size = scp_get_reserve_mem_size(SCP_THP_MEM_ID);
@@ -222,6 +229,9 @@ int xiaomi_touch_scp_switch(bool scp, u32 gestures)
 {
 	int ret;
 
+	if (scp_is_recovery_boot())
+		return 0;
+
 	mutex_lock(&touch_scp_lock);
 	if (!touch_scp.active || touch_scp.param.state < 2) {
 		ret = -EAGAIN;
@@ -256,6 +266,9 @@ int xiaomi_touch_scp_update_gesture(u32 gestures, u32 nonui)
 {
 	int ret = -EAGAIN;
 
+	if (scp_is_recovery_boot())
+		return 0;
+
 	mutex_lock(&touch_scp_lock);
 	if (xiaomi_touch_scp_owned())
 		ret = touch_scp_send(5, gestures, nonui, 0);
@@ -267,6 +280,9 @@ EXPORT_SYMBOL_GPL(xiaomi_touch_scp_update_gesture);
 int xiaomi_touch_scp_log_level(u32 level)
 {
 	int ret = -ENODEV;
+
+	if (scp_is_recovery_boot())
+		return 0;
 
 	mutex_lock(&touch_scp_lock);
 	if (touch_scp.active && READ_ONCE(touch_scp.param.state) >= 2)
@@ -281,6 +297,9 @@ int xiaomi_touch_scp_read(u32 address, void *data, size_t size)
 {
 	unsigned long flags;
 	int ret = -EHOSTDOWN;
+
+	if (scp_is_recovery_boot())
+		return -ENODEV;
 
 	spin_lock_irqsave(&touch_scp_rx_lock, flags);
 	if (!xiaomi_touch_scp_owned())

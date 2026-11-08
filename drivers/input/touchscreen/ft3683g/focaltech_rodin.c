@@ -535,6 +535,8 @@ int fts_rodin_register(struct fts_ts_data *ts)
 	fts_version(param.fw_version);
 	ret = xiaomi_touch_scp_register(ts->dev, ts->pinctrl, &scp_param, &scp_ops, ts);
 	ts->scp_registered = !ret;
+	if (ret)
+		dev_info(ts->dev, "SCP touch registration skipped/failed (%d), operating in direct AP mode\n", ret);
 	ret = register_touch_panel_common(ts->dev, 0, &param, &ops);
 	if (ret) {
 		if (ts->scp_registered)

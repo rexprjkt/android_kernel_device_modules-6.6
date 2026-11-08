@@ -556,6 +556,8 @@ int goodix_rodin_register(struct goodix_ts_core *cd)
 	ret = xiaomi_touch_scp_register(cd->bus->dev, cd->pinctrl,
 				       &scp_param, &scp_ops, cd);
 	cd->scp_registered = !ret;
+	if (ret)
+		dev_info(cd->bus->dev, "SCP touch registration skipped/failed (%d), operating in direct AP mode\n", ret);
 	ret = register_touch_panel_common(cd->bus->dev, 0, &param, &ops);
 	if (ret) {
 		if (cd->scp_registered)

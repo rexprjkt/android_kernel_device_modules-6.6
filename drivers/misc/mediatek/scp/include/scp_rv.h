@@ -301,5 +301,7 @@ extern void scp_send_thermal_wq(enum SCP_THERMAL_TYPE type);
 
 extern void dump_u1u2_clock(void);
 
+extern bool scp_is_recovery_boot(void);
+
 #endif
 

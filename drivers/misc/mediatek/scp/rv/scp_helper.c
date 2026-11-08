@@ -608,6 +608,60 @@ static void scp_A_unregister_notify_pending(void)
 	unregister_curr = &unregister_notify_pending;
 	spin_unlock(&notify_unregister_spinlock);
 }
+bool scp_is_recovery_boot(void)
+{
+	static int recovery_boot = -1;
+	struct device_node *np_chosen;
+	const char *bootargs;
+	const u32 *val;
+	struct tag_bootmode {
+		u32 size;
+		u32 tag;
+		u32 bootmode;
+		u32 boottype;
+	} const *tag;
+
+	if (recovery_boot >= 0)
+		return recovery_boot == 1;
+
+	recovery_boot = 0;
+
+	np_chosen = of_find_node_by_path("/chosen");
+	if (!np_chosen)
+		np_chosen = of_find_node_by_path("/chosen@0");
+
+	if (np_chosen) {
+		tag = (const struct tag_bootmode *)of_get_property(np_chosen, "atag,boot", NULL);
+		if (tag && tag->bootmode == 2) { /* RECOVERY_BOOT = 2 */
+			recovery_boot = 1;
+			return true;
+		}
+
+		val = (const u32 *)of_get_property(np_chosen, "bootmode", NULL);
+		if (val && be32_to_cpup(val) == 2) {
+			recovery_boot = 1;
+			return true;
+		}
+
+		val = (const u32 *)of_get_property(np_chosen, "mediatek,boot_mode", NULL);
+		if (val && be32_to_cpup(val) == 2) {
+			recovery_boot = 1;
+			return true;
+		}
+
+		bootargs = of_get_property(np_chosen, "bootargs", NULL);
+		if (bootargs && (strstr(bootargs, "androidboot.mode=recovery") ||
+				 strstr(bootargs, "bootmode=recovery") ||
+				 strstr(bootargs, "bootmode=2"))) {
+			recovery_boot = 1;
+			return true;
+		}
+	}
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(scp_is_recovery_boot);
+
 /*
  * register apps notification
  * NOTE: this function may be blocked
@@ -616,6 +670,9 @@ static void scp_A_unregister_notify_pending(void)
  */
 void scp_A_register_notify(struct notifier_block *nb)
 {
+	if (scp_is_recovery_boot())
+		return;
+
 	pr_debug("%s start\n", __func__);
 	switch (atomic_read(&scp_A_notifier_status)) {
 	/*
@@ -651,6 +708,9 @@ EXPORT_SYMBOL_GPL(scp_A_register_notify);
  */
 void scp_A_unregister_notify(struct notifier_block *nb)
 {
+	if (scp_is_recovery_boot())
+		return;
+
 	switch (atomic_read(&scp_A_notifier_status)) {
 	case SCP_EVENT_STOP:
 	case SCP_EVENT_READY:
@@ -976,6 +1036,9 @@ EXPORT_SYMBOL_GPL(is_scp_ready);
  */
 int reset_scp(int reset)
 {
+	if (scp_is_recovery_boot())
+		return 0;
+
 	scp_extern_notify(SCP_EVENT_STOP);
 
 	/* request pll clock before turn on scp */
@@ -1653,7 +1716,7 @@ RESERVEDMEM_OF_DECLARE(scp_reserve_mem_init
 
 phys_addr_t scp_get_reserve_mem_phys(enum scp_reserve_mem_id_t id)
 {
-	if (id >= NUMS_MEM_ID) {
+	if (scp_is_recovery_boot() || id >= NUMS_MEM_ID) {
 		pr_notice("[SCP] no reserve memory for %d", id);
 		return 0;
 	} else
@@ -1663,7 +1726,7 @@ EXPORT_SYMBOL_GPL(scp_get_reserve_mem_phys);
 
 phys_addr_t scp_get_reserve_mem_virt(enum scp_reserve_mem_id_t id)
 {
-	if (id >= NUMS_MEM_ID) {
+	if (scp_is_recovery_boot() || id >= NUMS_MEM_ID) {
 		pr_notice("[SCP] no reserve memory for %d", id);
 		return 0;
 	} else
@@ -1673,7 +1736,7 @@ EXPORT_SYMBOL_GPL(scp_get_reserve_mem_virt);
 
 phys_addr_t scp_get_reserve_mem_size(enum scp_reserve_mem_id_t id)
 {
-	if (id >= NUMS_MEM_ID) {
+	if (scp_is_recovery_boot() || id >= NUMS_MEM_ID) {
 		pr_notice("[SCP] no reserve memory for %d", id);
 		return 0;
 	} else
@@ -3396,6 +3459,12 @@ static int __init scp_init(void)
 {
 	int ret = 0;
 	int i = 0;
+
+	if (scp_is_recovery_boot()) {
+		pr_notice("[SCP] Recovery boot mode detected, skipping SCP initialization\n");
+		return 0;
+	}
+
 	scp_ipi_resume_dbg = false;
 	/* scp platform initialise */
 	pr_debug("[SCP2] %s begins\n", __func__);
@@ -3566,6 +3635,9 @@ err_without_unregister:
  */
 static void __exit scp_exit(void)
 {
+	if (scp_is_recovery_boot())
+		return;
+
 #if SCP_BOOT_TIME_OUT_MONITOR
 	int i = 0;
 #endif
