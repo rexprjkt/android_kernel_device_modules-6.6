@@ -515,10 +515,10 @@ static int goodix_dfs_test(int code)
 int goodix_rodin_register(struct goodix_ts_core *cd)
 {
 	hardware_param_t param = {
-		.x_resolution = cd->ic_info.other.screen_max_x ?: cd->board_data.panel_max_x ?: 1220,
-		.y_resolution = cd->ic_info.other.screen_max_y ?: cd->board_data.panel_max_y ?: 2712,
-		.rx_num = cd->ic_info.parm.sen_num ?: 17,
-		.tx_num = cd->ic_info.parm.drv_num ?: 38,
+		.x_resolution = cd->ic_info.other.screen_max_x,
+		.y_resolution = cd->ic_info.other.screen_max_y,
+		.rx_num = cd->ic_info.parm.sen_num,
+		.tx_num = cd->ic_info.parm.drv_num,
 		.frame_data_page_size = 2, .frame_data_buf_size = 10,
 		.raw_data_page_size = 5, .raw_data_buf_size = 5,
 		.temperature_change_threshold = 2,

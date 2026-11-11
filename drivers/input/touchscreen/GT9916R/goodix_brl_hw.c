@@ -185,69 +185,64 @@ static int brl_power_on(struct goodix_ts_core *cd, bool on)
 	ts_info("brl_power_on enter on is %d", on);
 
 	if (on) {
-		if (iovdd_gpio > 0)
+		/* must guarantee iovdd enbaled before avdd */
+		if (iovdd_gpio > 0) {
 			gpio_direction_output(iovdd_gpio, 1);
-		else if (cd->iovdd) {
-			ret = regulator_enable(cd->iovdd);
-			if (ret) {
-				ts_err("Failed to enable iovdd:%d", ret);
-				goto power_off;
-			}
-			ts_info("regulator enable iovdd success");
+			usleep_range(3000, 3100);
 		}
 
-		usleep_range(5000, 5100); /* T1 means iovdd enbaled before avdd*/
+		ret = regulator_enable(cd->iovdd);
+		if (ret) {
+			ts_err("Failed to enable iovdd:%d", ret);
+			return ret;
+		}
+		usleep_range(30000, 31000);
+		
 		if (avdd_gpio > 0) {
-			ret = gpio_direction_output(avdd_gpio, 1);
-			ts_info("gpio[%d] set directionn return:%d", avdd_gpio, ret);
-			ts_info("gpio[%d] value is:%d", avdd_gpio, gpio_get_value(avdd_gpio));
-		} else if (cd->avdd) {
-			ret = regulator_enable(cd->avdd);
-			if (ret) {
-				ts_err("Failed to enable avdd:%d", ret);
-				goto power_off;
-			}
-			ts_info("regulator enable avdd success");
-			usleep_range(10000, 10100);
+			gpio_direction_output(avdd_gpio, 1);
+			usleep_range(15000, 15100);
 		}
-
-		usleep_range(15000, 15100); /* T2 must longer than 10ms*/
+        
+		ret = regulator_enable(cd->avdd);
+		if (ret) {
+			regulator_disable(cd->iovdd);
+			ts_err("Failed to enable avdd:%d", ret);
+			return ret;
+		}
+		
+		ts_info("regulator enable SUCCESS");
+		usleep_range(15000, 15100);
 		gpio_direction_output(reset_gpio, 1);
 		ret = brl_reset_after(cd);
 		if (ret < 0) {
-			ts_err("reset_after process failed, ret = %d", ret);
-			goto power_off;
+			ts_err("reset_after process failed,ret=%d", ret);
+			gpio_direction_output(reset_gpio, 0);
+			return ret;
 		}
 		msleep(GOODIX_NORMAL_RESET_DELAY_MS);
+		ts_info("brl_power_on exit 11");
 		return 0;
 	}
-
-power_off:
-	ts_info("tp power off");
-
-	/* RST→ [≥1ms] →AVDD/3.3V→ [≥0ms]→DVDD/1.8V */
+	/*power off process */
 	gpio_direction_output(reset_gpio, 0);
+	
+	if (iovdd_gpio > 0)
+		gpio_direction_output(iovdd_gpio, 0);
 
-	usleep_range(1000, 1100);
+	ret = regulator_disable(cd->iovdd);
+	if (ret)
+		ts_err("Failed to disable iovdd:%d", ret);
+	usleep_range(3000, 3100);
 
 	if (avdd_gpio > 0)
 		gpio_direction_output(avdd_gpio, 0);
-	else if (cd->avdd) {
-		ret = regulator_disable(cd->avdd);
-		if (ret)
-			ts_err("Failed to disable avdd:%d", ret);
-	}
-
-	usleep_range(5000, 5100); /*Ensure power-off sequence avdd after iovdd*/
-	if (iovdd_gpio > 0)
-		gpio_direction_output(iovdd_gpio, 0);
-	else if (cd->iovdd) {
-		ret = regulator_disable(cd->iovdd);
-		if (ret < 0)
-			ts_err("Failed to disable iovdd:%d", ret);
-	}
-
+    
+	ret = regulator_disable(cd->avdd);
+	if (ret)
+		ts_err("Failed to disable avdd:%d", ret);
+	
 	usleep_range(10000, 11000);
+	ts_info("brl_power_on exit 22");
 	return ret;
 }
 
@@ -294,9 +289,11 @@ static int brl_dev_confirm(struct goodix_ts_core *cd)
 	memset(tx_buf, DEV_CONFIRM_VAL, sizeof(tx_buf));
 	while (retry--) {
 		ret = hw_ops->write(cd, BOOTOPTION_ADDR, tx_buf, sizeof(tx_buf));
+		ts_info("device confirm failed, tx_buf:%*ph", 8, tx_buf);
 		if (ret < 0)
 			return ret;
 		ret = hw_ops->read(cd, BOOTOPTION_ADDR, rx_buf, sizeof(rx_buf));
+		ts_info("device confirm failed, rx_buf:%*ph", 8, rx_buf);
 		if (ret < 0)
 			return ret;
 		if (!memcmp(tx_buf, rx_buf, sizeof(tx_buf)))
