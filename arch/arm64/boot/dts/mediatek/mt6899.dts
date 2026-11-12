@@ -15419,7 +15419,6 @@ bootmonitor_pmsg@6ec00000  {
 				interrupts = <GIC_SPI 698 IRQ_TYPE_LEVEL_HIGH 0>;
 				clocks = <&clk26m>;
 				clock-names = "sys_ck";
-				mediatek,usb-offload = <&usb_offload>;
 				status = "okay";
 			};
 		};
