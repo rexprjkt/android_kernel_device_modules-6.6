@@ -9,8 +9,13 @@
 #include <linux/delay.h>
 #include <linux/soc/mediatek/mtk_ise_lpm.h>
 #include <linux/soc/mediatek/mtk-ise-mbox.h>
+#if IS_ENABLED(CONFIG_SCSI_UFS_XIAOMI)
+#include "mi_ufs/include/mi_ufshcd.h"
+#include "mi_ufshcd-priv.h"
+#else
 #include <ufs/ufshcd.h>
 #include <ufshcd-priv.h>
+#endif
 
 #include "ufs-mediatek-dbg.h"
 #include "ufs-mediatek-mimic.h"

@@ -22,8 +22,13 @@
 #include <linux/tracepoint.h>
 #include <sched/sched.h>
 #include "governor.h"
+#if IS_ENABLED(CONFIG_SCSI_UFS_XIAOMI)
+#include "mi_ufshcd-priv.h"
+#include "mi_ufs/include/mi_ufshcd.h"
+#else
 #include "ufshcd-priv.h"
 #include <ufs/ufshcd.h>
+#endif
 #if IS_ENABLED(CONFIG_MTK_AEE_IPANIC)
 #include <mt-plat/mrdump.h>
 #endif

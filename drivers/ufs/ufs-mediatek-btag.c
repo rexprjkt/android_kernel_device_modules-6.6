@@ -8,7 +8,11 @@
 
 #include <linux/async.h>
 #include <scsi/scsi_cmnd.h>
+#if IS_ENABLED(CONFIG_SCSI_UFS_XIAOMI)
+#include "mi_ufs/include/mi_ufshcd.h"
+#else
 #include <ufs/ufshcd.h>
+#endif
 #include "ufs-mediatek.h"
 #include "ufs-mediatek-sysfs.h"
 #include <mt-plat/mtk_blocktag.h>

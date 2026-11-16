@@ -20,10 +20,15 @@
 #include <linux/timer.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_dbg.h>
+#if IS_ENABLED(CONFIG_SCSI_UFS_XIAOMI)
+#include "mi_ufs/include/mi_ufshcd.h"
+#include "mi_ufshcd-priv.h"
+#else
 #include <ufs/ufshcd.h>
+#include "ufshcd-priv.h"
+#endif
 #include "ufs-mediatek-ise.h"
 #include "ufs-mediatek.h"
-#include "ufshcd-priv.h"
 
 static struct rpmb_dev *rawdev_ufs_rpmb;
 static int ufs_mtk_rpmb_cmd_seq(struct device *dev,

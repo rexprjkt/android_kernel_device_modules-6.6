@@ -26,6 +26,15 @@
 #include <linux/tracepoint.h>
 #include <scsi/scsi_proto.h>
 #include <scsi/scsi_dbg.h>
+#if IS_ENABLED(CONFIG_SCSI_UFS_XIAOMI)
+#include "mi_ufs/include/mi_ufs_quirks.h"
+#include "mi_ufs/include/mi_ufshcd.h"
+#include "mi_ufs/include/mi_unipro.h"
+
+#include "mi_ufshcd-crypto.h"
+#include "mi_ufshcd-pltfrm.h"
+#include "mi_ufshcd-priv.h"
+#else
 #include <ufs/ufs_quirks.h>
 #include <ufs/ufshcd.h>
 #include <ufs/unipro.h>
@@ -33,6 +42,11 @@
 #include "ufshcd-crypto.h"
 #include "ufshcd-pltfrm.h"
 #include "ufshcd-priv.h"
+#endif
+
+#if IS_ENABLED(CONFIG_MI_ERROR_STATE)
+#include "mi_ufsctx.h"
+#endif
 
 /* MediaTek UFS facilities */
 #include "ufs-mediatek-btag.h"
@@ -3217,6 +3231,11 @@ static void ufs_mtk_event_notify(struct ufs_hba *hba,
 	struct ufs_mtk_host *host = ufshcd_get_variant(hba);
 
 	trace_ufs_mtk_event(evt, val);
+
+#if IS_ENABLED(CONFIG_MI_ERROR_STATE)
+	ufshcd_update_err_state(evt, val);
+	ufshcd_update_uic_error_cnt(evt, val);
+#endif
 
 	/* Print details of UIC Errors */
 	if (evt <= UFS_EVT_DME_ERR) {

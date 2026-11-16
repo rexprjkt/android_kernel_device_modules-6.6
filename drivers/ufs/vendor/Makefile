@@ -5,6 +5,9 @@ ccflags-y += -I$(DEVICE_MODULES_PATH)/drivers/misc/mediatek/include/
 ccflags-y += -I$(DEVICE_MODULES_PATH)/drivers/misc/mediatek/power_throttling/
 ccflags-y += -I$(DEVICE_MODULES_PATH)/drivers/ufs/
 ccflags-y += -I$(DEVICE_MODULES_PATH)/drivers/ufs/vendor/
+ccflags-$(CONFIG_SCSI_UFS_XIAOMI) += -I$(DEVICE_MODULES_PATH)/drivers/ufs/mi_ufs/core/
+ccflags-$(CONFIG_SCSI_UFS_XIAOMI) += -I$(DEVICE_MODULES_PATH)/drivers/ufs/mi_ufs/host/
+ccflags-$(CONFIG_SCSI_UFS_XIAOMI) += -I$(DEVICE_MODULES_PATH)/drivers/ufs/mi_ufs/include/
 
 ccflags-y += -I$(srctree)/drivers/scsi/
 ccflags-y += -I$(srctree)/kernel/
@@ -32,6 +35,28 @@ ufs-mediatek-mod-$(CONFIG_UFSTW)                += ufstw.o
 ufs-mediatek-mod-$(CONFIG_UFSHID)               += ufshid.o
 ufs-mediatek-mod-$(CONFIG_UFSRINGBUF)           += ufsringbuf.o
 
+# Xiaomi UFS core & features
+ifeq ($(CONFIG_SCSI_UFS_XIAOMI),y)
+ufs-mediatek-mod-y += ../mi_ufs/core/mi_ufshcd.o \
+                      ../mi_ufs/core/mi_ufs-sysfs.o \
+                      ../mi_ufs/core/mi_ufs-mcq.o \
+                      ../mi_ufs/host/mi_ufshcd-pltfrm.o
+ufs-mediatek-mod-$(CONFIG_DEBUG_FS) += ../mi_ufs/core/mi_ufs-debugfs.o
+ufs-mediatek-mod-$(CONFIG_SCSI_UFS_BSG) += ../mi_ufs/core/mi_ufs_bsg.o
+ufs-mediatek-mod-$(CONFIG_SCSI_UFS_CRYPTO) += ../mi_ufs/core/mi_ufshcd-crypto.o
+ufs-mediatek-mod-$(CONFIG_SCSI_UFS_FAULT_INJECTION) += ../mi_ufs/core/mi_ufs-fault-injection.o
+ufs-mediatek-mod-$(CONFIG_SCSI_UFS_HWMON) += ../mi_ufs/core/mi_ufs-hwmon.o
+ufs-mediatek-mod-$(CONFIG_SCSI_UFS_XIAOMI_CLD) += ../mi_ufs/feature/cld/ufscld.o \
+                                                 ../mi_ufs/feature/cld/ufscld_sysfs.o \
+                                                 ../mi_ufs/feature/cld/hid.o \
+                                                 ../mi_ufs/feature/cld/kioxia_cld.o \
+                                                 ../mi_ufs/feature/cld/micron_cld.o \
+                                                 ../mi_ufs/feature/cld/samsung_cld.o \
+                                                 ../mi_ufs/feature/cld/skhynixcld.o \
+                                                 ../mi_ufs/feature/cld/ymtc_cld.o
+ufs-mediatek-mod-$(CONFIG_SCSI_UFS_XIAOMI_FFU) += ../mi_ufs/feature/ffu/ufsffu.o
+endif
+
 
 # UFS KO with iSE enabled
 ccflags-y += -I$(srctree)/drivers/ufs/
@@ -53,3 +78,24 @@ ufs-mediatek-mod-ise-$(CONFIG_UFSSHPB)              += ufsshpb.o
 ufs-mediatek-mod-ise-$(CONFIG_UFSTW)                += ufstw.o
 ufs-mediatek-mod-ise-$(CONFIG_UFSHID)               += ufshid.o
 ufs-mediatek-mod-ise-$(CONFIG_UFSRINGBUF)           += ufsringbuf.o
+
+ifeq ($(CONFIG_SCSI_UFS_XIAOMI),y)
+ufs-mediatek-mod-ise-y += ../mi_ufs/core/mi_ufshcd.o \
+                          ../mi_ufs/core/mi_ufs-sysfs.o \
+                          ../mi_ufs/core/mi_ufs-mcq.o \
+                          ../mi_ufs/host/mi_ufshcd-pltfrm.o
+ufs-mediatek-mod-ise-$(CONFIG_DEBUG_FS) += ../mi_ufs/core/mi_ufs-debugfs.o
+ufs-mediatek-mod-ise-$(CONFIG_SCSI_UFS_BSG) += ../mi_ufs/core/mi_ufs_bsg.o
+ufs-mediatek-mod-ise-$(CONFIG_SCSI_UFS_CRYPTO) += ../mi_ufs/core/mi_ufshcd-crypto.o
+ufs-mediatek-mod-ise-$(CONFIG_SCSI_UFS_FAULT_INJECTION) += ../mi_ufs/core/mi_ufs-fault-injection.o
+ufs-mediatek-mod-ise-$(CONFIG_SCSI_UFS_HWMON) += ../mi_ufs/core/mi_ufs-hwmon.o
+ufs-mediatek-mod-ise-$(CONFIG_SCSI_UFS_XIAOMI_CLD) += ../mi_ufs/feature/cld/ufscld.o \
+                                                     ../mi_ufs/feature/cld/ufscld_sysfs.o \
+                                                     ../mi_ufs/feature/cld/hid.o \
+                                                     ../mi_ufs/feature/cld/kioxia_cld.o \
+                                                     ../mi_ufs/feature/cld/micron_cld.o \
+                                                     ../mi_ufs/feature/cld/samsung_cld.o \
+                                                     ../mi_ufs/feature/cld/skhynixcld.o \
+                                                     ../mi_ufs/feature/cld/ymtc_cld.o
+ufs-mediatek-mod-ise-$(CONFIG_SCSI_UFS_XIAOMI_FFU) += ../mi_ufs/feature/ffu/ufsffu.o
+endif

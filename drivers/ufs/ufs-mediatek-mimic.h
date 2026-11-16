@@ -6,7 +6,11 @@
 #define _UFS_MEDIATEK_MIMIC_
 
 #include <linux/types.h>
+#if IS_ENABLED(CONFIG_SCSI_UFS_XIAOMI)
+#include "mi_ufs/include/mi_ufshcd.h"
+#else
 #include <ufs/ufshcd.h>
+#endif
 
 /* UIC layer error flags */
 enum {
