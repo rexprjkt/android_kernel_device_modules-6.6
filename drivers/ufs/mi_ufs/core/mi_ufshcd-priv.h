@@ -4,7 +4,6 @@
 #define _UFSHCD_PRIV_H_
 
 #include <linux/pm_runtime.h>
-#include <linux/version.h>
 #include "../include/mi_ufshcd.h"
 
 static inline bool ufshcd_is_user_access_allowed(struct ufs_hba *hba)
@@ -332,11 +331,7 @@ static inline void ufshcd_rpm_put_noidle(struct ufs_hba *hba)
 
 static inline int ufshcd_rpm_get_if_active(struct ufs_hba *hba)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
-	return pm_runtime_get_if_active(&hba->ufs_device_wlun->sdev_gendev);
-#else
 	return pm_runtime_get_if_active(&hba->ufs_device_wlun->sdev_gendev, 1);
-#endif
 }
 
 static inline int ufshcd_rpm_put_sync(struct ufs_hba *hba)

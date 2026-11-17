@@ -47,16 +47,6 @@
 #undef TRACE_INCLUDE_PATH
 #undef TRACE_INCLUDE_FILE
 #include <trace/hooks/ufshcd.h>
-#include <linux/version.h>
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
-struct cq_entry;
-static inline void trace_android_vh_ufs_wait_for_uic_cmd(struct ufs_hba *hba, const struct uic_command *uic_cmd, int ret) {}
-static inline void trace_android_vh_ufs_dev_cmd_completion(struct ufs_hba *hba, struct ufshcd_lrb *lrbp, int err) {}
-static inline void trace_android_vh_ufs_link_startup(struct ufs_hba *hba, int ret) {}
-static inline void trace_android_vh_ufs_transfer_rsp_status(struct ufs_hba *hba, struct ufshcd_lrb *lrbp, struct cq_entry *cqe, int result) {}
-static inline void trace_android_vh_ufs_eh_timed_out(struct ufs_hba *hba, struct scsi_cmnd *scmd) {}
-#endif
 
 #ifdef CONFIG_SCSI_UFS_XIAOMI_FFU
 #include "../feature/ffu/ufsffu.h"
@@ -1333,58 +1323,6 @@ out:
 	return ret;
 }
 
-int ufshcd_opp_config_clks(struct device *dev, struct opp_table *opp_table,
-			   struct dev_pm_opp *opp, void *data,
-			   bool scaling_down)
-{
-	struct ufs_hba *hba = dev_get_drvdata(dev);
-	struct list_head *head = &hba->clk_list_head;
-	struct ufs_clk_info *clki;
-	unsigned long freq;
-	u8 idx = 0;
-	int ret;
-
-	list_for_each_entry(clki, head, list) {
-		if (!IS_ERR_OR_NULL(clki->clk)) {
-			freq = dev_pm_opp_get_freq_indexed(opp, idx++);
-
-			/* Do not set rate for clocks having frequency as 0 */
-			if (!freq)
-				continue;
-
-			ret = clk_set_rate(clki->clk, freq);
-			if (ret) {
-				dev_err(dev, "%s: %s clk set rate(%ldHz) failed, %d\n",
-					__func__, clki->name, freq, ret);
-				return ret;
-			}
-
-			trace_ufshcd_clk_scaling(hba,
-				(scaling_down ? "scaled down" : "scaled up"),
-				clki->name, hba->clk_scaling.target_freq, freq);
-		}
-	}
-
-	return 0;
-}
-
-
-static int ufshcd_opp_set_rate(struct ufs_hba *hba, unsigned long freq)
-{
-	struct dev_pm_opp *opp;
-	int ret;
-
-	opp = dev_pm_opp_find_freq_floor_indexed(hba->dev,
-						 &freq, 0);
-	if (IS_ERR(opp))
-		return PTR_ERR(opp);
-
-	ret = dev_pm_opp_set_opp(hba->dev, opp);
-	dev_pm_opp_put(opp);
-
-	return ret;
-}
-
 /**
  * ufshcd_scale_clks - scale up or scale down UFS controller clocks
  * @hba: per adapter instance
@@ -1403,20 +1341,13 @@ static int ufshcd_scale_clks(struct ufs_hba *hba, unsigned long freq,
 	if (ret)
 		goto out;
 
-	if (false)
-		ret = ufshcd_opp_set_rate(hba, freq);
-	else
-		ret = ufshcd_set_clk_freq(hba, scale_up);
+	ret = ufshcd_set_clk_freq(hba, scale_up);
 	if (ret)
 		goto out;
 
 	ret = ufshcd_vops_clk_scale_notify(hba, scale_up, POST_CHANGE);
 	if (ret) {
-		if (false)
-			ufshcd_opp_set_rate(hba,
-					    hba->devfreq->previous_freq);
-		else
-			ufshcd_set_clk_freq(hba, !scale_up);
+		ufshcd_set_clk_freq(hba, !scale_up);
 		goto out;
 	}
 
@@ -1445,9 +1376,6 @@ static bool ufshcd_is_devfreq_scaling_required(struct ufs_hba *hba,
 
 	if (list_empty(head))
 		return false;
-
-	if (false)
-		return freq != hba->clk_scaling.target_freq;
 
 	list_for_each_entry(clki, head, list) {
 		if (!IS_ERR_OR_NULL(clki->clk)) {
@@ -1752,21 +1680,10 @@ static int ufshcd_devfreq_target(struct device *dev,
 	if (!ufshcd_is_clkscaling_supported(hba))
 		return -EINVAL;
 
-	if (false) {
-		struct dev_pm_opp *opp;
-
-		/* Get the recommended frequency from OPP framework */
-		opp = devfreq_recommended_opp(dev, freq, flags);
-		if (IS_ERR(opp))
-			return PTR_ERR(opp);
-
-		dev_pm_opp_put(opp);
-	} else {
-		/* Override with the closest supported frequency */
-		clki = list_first_entry(&hba->clk_list_head, struct ufs_clk_info,
-					list);
-		*freq =	(unsigned long) clk_round_rate(clki->clk, *freq);
-	}
+	/* Override with the closest supported frequency */
+	clki = list_first_entry(&hba->clk_list_head, struct ufs_clk_info,
+				list);
+	*freq =	(unsigned long) clk_round_rate(clki->clk, *freq);
 
 	spin_lock_irqsave(hba->host->host_lock, irq_flags);
 	if (ufshcd_eh_in_progress(hba)) {
@@ -1789,13 +1706,9 @@ static int ufshcd_devfreq_target(struct device *dev,
 		goto out;
 	}
 
-	/* Decide based on the target or rounded-off frequency and update */
-	if (false)
-		scale_up = *freq > hba->clk_scaling.target_freq;
-	else
-		scale_up = *freq == clki->max_freq;
-
-	if (!false && !scale_up)
+	/* Decide based on the rounded-off frequency and update */
+	scale_up = (*freq == clki->max_freq) ? true : false;
+	if (!scale_up)
 		*freq = clki->min_freq;
 
 	/* Update the frequency */
@@ -1830,6 +1743,8 @@ static int ufshcd_devfreq_get_dev_status(struct device *dev,
 	struct ufs_hba *hba = dev_get_drvdata(dev);
 	struct ufs_clk_scaling *scaling = &hba->clk_scaling;
 	unsigned long flags;
+	struct list_head *clk_list;
+	struct ufs_clk_info *clki;
 	ktime_t curr_t;
 
 	if (!ufshcd_is_clkscaling_supported(hba))
@@ -1847,15 +1762,9 @@ static int ufshcd_devfreq_get_dev_status(struct device *dev,
 	 * there's no initial frequency set. And it always requests to set
 	 * to max. frequency.
 	 */
-	if (false) {
-		stat->current_frequency = hba->clk_scaling.target_freq;
-	} else {
-		struct list_head *clk_list = &hba->clk_list_head;
-		struct ufs_clk_info *clki;
-
-		clki = list_first_entry(clk_list, struct ufs_clk_info, list);
-		stat->current_frequency = clki->curr_freq;
-	}
+	clk_list = &hba->clk_list_head;
+	clki = list_first_entry(clk_list, struct ufs_clk_info, list);
+	stat->current_frequency = clki->curr_freq;
 
 	if (scaling->is_busy_started)
 		scaling->tot_busy_t += ktime_us_delta(curr_t,
@@ -1888,11 +1797,9 @@ static int ufshcd_devfreq_init(struct ufs_hba *hba)
 	if (list_empty(clk_list))
 		return 0;
 
-	if (!false) {
-		clki = list_first_entry(clk_list, struct ufs_clk_info, list);
-		dev_pm_opp_add(hba->dev, clki->min_freq, 0);
-		dev_pm_opp_add(hba->dev, clki->max_freq, 0);
-	}
+	clki = list_first_entry(clk_list, struct ufs_clk_info, list);
+	dev_pm_opp_add(hba->dev, clki->min_freq, 0);
+	dev_pm_opp_add(hba->dev, clki->max_freq, 0);
 
 	ufshcd_vops_config_scaling_param(hba, &hba->vps->devfreq_profile,
 					 &hba->vps->ondemand_data);
@@ -1904,10 +1811,8 @@ static int ufshcd_devfreq_init(struct ufs_hba *hba)
 		ret = PTR_ERR(devfreq);
 		dev_err(hba->dev, "Unable to register with devfreq %d\n", ret);
 
-		if (!false) {
-			dev_pm_opp_remove(hba->dev, clki->min_freq);
-			dev_pm_opp_remove(hba->dev, clki->max_freq);
-		}
+		dev_pm_opp_remove(hba->dev, clki->min_freq);
+		dev_pm_opp_remove(hba->dev, clki->max_freq);
 		return ret;
 	}
 
@@ -1919,6 +1824,7 @@ static int ufshcd_devfreq_init(struct ufs_hba *hba)
 static void ufshcd_devfreq_remove(struct ufs_hba *hba)
 {
 	struct list_head *clk_list = &hba->clk_list_head;
+	struct ufs_clk_info *clki;
 
 	if (!hba->devfreq)
 		return;
@@ -1926,13 +1832,9 @@ static void ufshcd_devfreq_remove(struct ufs_hba *hba)
 	devfreq_remove_device(hba->devfreq);
 	hba->devfreq = NULL;
 
-	if (!false) {
-		struct ufs_clk_info *clki;
-
-		clki = list_first_entry(clk_list, struct ufs_clk_info, list);
-		dev_pm_opp_remove(hba->dev, clki->min_freq);
-		dev_pm_opp_remove(hba->dev, clki->max_freq);
-	}
+	clki = list_first_entry(clk_list, struct ufs_clk_info, list);
+	dev_pm_opp_remove(hba->dev, clki->min_freq);
+	dev_pm_opp_remove(hba->dev, clki->max_freq);
 }
 
 static void ufshcd_suspend_clkscaling(struct ufs_hba *hba)
@@ -2778,7 +2680,6 @@ ufshcd_wait_for_uic_cmd(struct ufs_hba *hba, struct uic_command *uic_cmd)
 	hba->active_uic_cmd = NULL;
 	spin_unlock_irqrestore(hba->host->host_lock, flags);
 
-	trace_android_vh_ufs_wait_for_uic_cmd(hba, uic_cmd, ret);
 	return ret;
 }
 
@@ -3425,7 +3326,6 @@ ufshcd_dev_cmd_completion(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
 				__func__, resp);
 		break;
 	}
-	trace_android_vh_ufs_dev_cmd_completion(hba, lrbp, err);
 	return err;
 }
 
@@ -5456,7 +5356,6 @@ out:
 		ufshcd_print_pwr_info(hba);
 		ufshcd_print_evt_hist(hba);
 	}
-	trace_android_vh_ufs_link_startup(hba, ret);
 	return ret;
 }
 
@@ -5642,44 +5541,11 @@ static int ufshcd_change_queue_depth(struct scsi_device *sdev, int depth)
 }
 
 /**
- * ufshcd_device_configure - adjust SCSI device configurations
+ * ufshcd_slave_configure - adjust SCSI device configurations
  * @sdev: pointer to SCSI device
- * @lim: queue limits
  *
  * Return: 0 (success).
  */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
-static int ufshcd_device_configure(struct scsi_device *sdev,
-		struct queue_limits *lim)
-{
-	struct ufs_hba *hba = shost_priv(sdev->host);
-	struct request_queue *q = sdev->request_queue;
-
-	lim->dma_pad_mask = PRDT_DATA_BYTE_COUNT_PAD - 1;
-
-	/*
-	 * Block runtime-pm until all consumers are added.
-	 * Refer ufshcd_setup_links().
-	 */
-	if (is_device_wlun(sdev))
-		pm_runtime_get_noresume(&sdev->sdev_gendev);
-	else if (ufshcd_is_rpm_autosuspend_allowed(hba))
-		sdev->rpm_autosuspend = 1;
-	/*
-	 * Do not print messages during runtime PM to avoid never-ending cycles
-	 * of messages written back to storage by user space causing runtime
-	 * resume, causing more messages and so on.
-	 */
-	sdev->silence_suspend = 1;
-
-	if (hba->vops && hba->vops->config_scsi_dev)
-		hba->vops->config_scsi_dev(sdev);
-
-	ufshcd_crypto_register(hba, q);
-
-	return 0;
-}
-#else
 static int ufshcd_slave_configure(struct scsi_device *sdev)
 {
 	struct ufs_hba *hba = shost_priv(sdev->host);
@@ -5709,7 +5575,6 @@ static int ufshcd_slave_configure(struct scsi_device *sdev)
 
 	return 0;
 }
-#endif
 
 /**
  * ufshcd_slave_destroy - remove SCSI device configurations
@@ -5894,7 +5759,6 @@ ufshcd_transfer_rsp_status(struct ufs_hba *hba, struct ufshcd_lrb *lrbp,
 	    (host_byte(result) != DID_REQUEUE) && !hba->silence_err_logs)
 		ufshcd_print_tr(hba, lrbp->task_tag, true);
 
-	trace_android_vh_ufs_transfer_rsp_status(hba, lrbp, cqe, result);
 	return result;
 }
 
@@ -9493,8 +9357,6 @@ static enum scsi_timeout_action ufshcd_eh_timed_out(struct scsi_cmnd *scmd)
 	dev_info(hba->dev, "%s() finished; outstanding_tasks = %#lx.\n",
 		 __func__, hba->outstanding_tasks);
 
-	trace_android_vh_ufs_eh_timed_out(hba, scmd);
-
 	return scsi_host_busy(hba->host) ? SCSI_EH_RESET_TIMER : SCSI_EH_DONE;
 }
 
@@ -9522,11 +9384,7 @@ static const struct scsi_host_template ufshcd_driver_template = {
 	.queuecommand		= ufshcd_queuecommand,
 	.mq_poll		= ufshcd_poll,
 	.slave_alloc		= ufshcd_slave_alloc,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
-	.device_configure	= ufshcd_device_configure,
-#else
 	.slave_configure	= ufshcd_slave_configure,
-#endif
 	.slave_destroy		= ufshcd_slave_destroy,
 	.change_queue_depth	= ufshcd_change_queue_depth,
 	.eh_abort_handler	= ufshcd_abort,
@@ -9833,16 +9691,6 @@ static int ufshcd_init_clocks(struct ufs_hba *hba)
 				clki->name, clk_get_rate(clki->clk));
 	}
 
-	/* Set Max. frequency for all clocks */
-	if (false) {
-		ret = ufshcd_opp_set_rate(hba, ULONG_MAX);
-		if (ret) {
-			dev_err(hba->dev, "%s: failed to set OPP: %d", __func__,
-				ret);
-			goto out;
-		}
-	}
-
 out:
 	return ret;
 }
@@ -9957,29 +9805,11 @@ static int ufshcd_execute_start_stop(struct scsi_device *sdev,
 				     struct scsi_sense_hdr *sshdr)
 {
 	const unsigned char cdb[6] = { START_STOP, 0, 0, 0, pwr_mode << 4, 0 };
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
-	struct scsi_failure failure_defs[] = {
-		{
-			.allowed = 2,
-			.result = SCMD_FAILURE_RESULT_ANY,
-		},
-	};
-	struct scsi_failures failures = {
-		.failure_definitions = failure_defs,
-	};
-	const struct scsi_exec_args args = {
-		.failures = &failures,
-		.sshdr = sshdr,
-		.req_flags = BLK_MQ_REQ_PM,
-		.scmd_flags = SCMD_FAIL_IF_RECOVERING,
-	};
-#else
 	const struct scsi_exec_args args = {
 		.sshdr = sshdr,
 		.req_flags = BLK_MQ_REQ_PM,
 		.scmd_flags = SCMD_FAIL_IF_RECOVERING,
 	};
-#endif
 
 	return scsi_execute_cmd(sdev, cdb, REQ_OP_DRV_IN, /*buffer=*/NULL,
 			/*bufflen=*/0, /*timeout=*/10 * HZ, /*retries=*/0,
@@ -10002,9 +9832,7 @@ static int ufshcd_set_dev_pwr_mode(struct ufs_hba *hba,
 	struct scsi_device *sdp;
 	unsigned long flags;
 	int ret;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
 	int retries;
-#endif
 
 	spin_lock_irqsave(hba->host->host_lock, flags);
 	sdp = hba->ufs_device_wlun;
@@ -10030,9 +9858,6 @@ static int ufshcd_set_dev_pwr_mode(struct ufs_hba *hba,
 	 * callbacks hence set the RQF_PM flag so that it doesn't resume the
 	 * already suspended childs.
 	 */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
-	ret = ufshcd_execute_start_stop(sdp, pwr_mode, &sshdr);
-#else
 	for (retries = 3; retries > 0; --retries) {
 		ret = ufshcd_execute_start_stop(sdp, pwr_mode, &sshdr);
 		/*
@@ -10042,7 +9867,6 @@ static int ufshcd_set_dev_pwr_mode(struct ufs_hba *hba,
 		if (ret <= 0)
 			break;
 	}
-#endif
 	if (ret) {
 		sdev_printk(KERN_WARNING, sdp,
 			    "START_STOP failed for power mode: %d, result %x\n",
@@ -11190,11 +11014,7 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 	err = blk_mq_alloc_tag_set(&hba->tmf_tag_set);
 	if (err < 0)
 		goto out_remove_scsi_host;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
-	hba->tmf_queue = blk_mq_alloc_queue(&hba->tmf_tag_set, NULL, NULL);
-#else
 	hba->tmf_queue = blk_mq_init_queue(&hba->tmf_tag_set);
-#endif
 	if (IS_ERR(hba->tmf_queue)) {
 		err = PTR_ERR(hba->tmf_queue);
 		goto free_tmf_tag_set;

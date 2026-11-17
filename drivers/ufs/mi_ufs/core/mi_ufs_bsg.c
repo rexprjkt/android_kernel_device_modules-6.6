@@ -7,7 +7,6 @@
 
 #include <linux/bsg-lib.h>
 #include <linux/dma-mapping.h>
-#include <linux/version.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_host.h>
 #include "mi_ufs_bsg.h"
@@ -257,13 +256,8 @@ int ufs_bsg_probe(struct ufs_hba *hba)
 	if (ret)
 		goto out;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
-	q = bsg_setup_queue(bsg_dev, dev_name(bsg_dev), NULL, ufs_bsg_request,
-			NULL, 0);
-#else
 	q = bsg_setup_queue(bsg_dev, dev_name(bsg_dev), ufs_bsg_request,
 			NULL, 0);
-#endif
 	if (IS_ERR(q)) {
 		ret = PTR_ERR(q);
 		device_del(bsg_dev);
