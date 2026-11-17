@@ -10002,6 +10002,9 @@ static int ufshcd_set_dev_pwr_mode(struct ufs_hba *hba,
 	struct scsi_device *sdp;
 	unsigned long flags;
 	int ret;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
+	int retries;
+#endif
 
 	spin_lock_irqsave(hba->host->host_lock, flags);
 	sdp = hba->ufs_device_wlun;
@@ -10027,7 +10030,19 @@ static int ufshcd_set_dev_pwr_mode(struct ufs_hba *hba,
 	 * callbacks hence set the RQF_PM flag so that it doesn't resume the
 	 * already suspended childs.
 	 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 	ret = ufshcd_execute_start_stop(sdp, pwr_mode, &sshdr);
+#else
+	for (retries = 3; retries > 0; --retries) {
+		ret = ufshcd_execute_start_stop(sdp, pwr_mode, &sshdr);
+		/*
+		 * scsi_execute() only returns a negative value if the request
+		 * queue is dying.
+		 */
+		if (ret <= 0)
+			break;
+	}
+#endif
 	if (ret) {
 		sdev_printk(KERN_WARNING, sdp,
 			    "START_STOP failed for power mode: %d, result %x\n",
