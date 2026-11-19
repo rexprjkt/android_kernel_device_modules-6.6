@@ -258,11 +258,13 @@ static void fts_gesture_report(struct input_dev *input_dev, int gesture_id)
         break;
 
     case GESTURE_DOUBLECLICK:
-	gesture = KEY_WAKEUP;
-	break;
+        notify_oneshot_sensor(ONESHOT_SENSOR_DOUBLE_TAP, 1);
+        gesture = KEY_WAKEUP;
+        break;
     case GESTURE_SINGLETAP:
-	gesture = KEY_GOTO;
-	break;
+        notify_oneshot_sensor(ONESHOT_SENSOR_SINGLE_TAP, 1);
+        gesture = KEY_GOTO;
+        break;
     case GESTURE_O:
         gesture = KEY_GESTURE_O;
         break;

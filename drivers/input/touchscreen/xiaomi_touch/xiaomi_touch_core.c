@@ -46,6 +46,24 @@ static u64 touch_generation;
 static void xiaomi_touch_unregister_panel(int touch_id);
 #define RAW_SIZE (PAGE_SIZE * 12)
 
+struct oneshot_sensor_attribute {
+	struct device_attribute dev_attr;
+	enum oneshot_sensor_type type;
+};
+
+struct oneshot_sensor {
+	char *enabled_name;
+	char *status_name;
+	struct oneshot_sensor_attribute enabled_attr;
+	struct oneshot_sensor_attribute status_attr;
+	int mode;
+	atomic_t pending_event;
+	struct mutex mutex;
+};
+
+static struct oneshot_sensor *oneshot_sensor_map[ONESHOT_SENSOR_TYPE_NUM];
+static atomic_t oneshot_sensor_enabled_requested[ONESHOT_SENSOR_TYPE_NUM];
+
 int current_log_level = 3;
 static int vendor_log_level = 3;
 static u64 ic_buffer_addr;
@@ -226,9 +244,17 @@ static void xiaomi_touch_apply_pm(struct xiaomi_touch_panel_data *panel)
 		return;
 	}
 	if (panel->pm_resume) {
+		int i;
+
 		xiaomi_touch_set_suspend_state(XIAOMI_TOUCH_RESUME);
 		/* Query here too: a supply event may still be queued behind resume. */
 		xiaomi_touch_charge_notify(panel, xiaomi_touch_get_charging_status());
+		for (i = 0; i < ONESHOT_SENSOR_TYPE_NUM; i++) {
+			if (oneshot_sensor_map[i] &&
+			    atomic_xchg(&oneshot_sensor_map[i]->pending_event, 0))
+				mi_ts_info("cleared pending event for sensor %d due to unblank\n",
+					   i);
+		}
 	} else {
 		xiaomi_touch_set_suspend_state(XIAOMI_TOUCH_SUSPEND);
 	}
@@ -649,6 +675,15 @@ static void xiaomi_touch_init_modes(struct xiaomi_touch_panel_data *panel,
 		panel->touch_mode[i][SET_CUR_VALUE] = values[3];
 		panel->touch_mode[i][GET_CUR_VALUE] = values[4];
 	}
+	for (i = 0; i < ONESHOT_SENSOR_TYPE_NUM; i++) {
+		if (oneshot_sensor_map[i]) {
+			int val = atomic_read(&oneshot_sensor_enabled_requested[i]);
+			int mode = oneshot_sensor_map[i]->mode;
+
+			panel->touch_mode[mode][SET_CUR_VALUE] = val;
+			panel->touch_mode[mode][GET_CUR_VALUE] = val;
+		}
+	}
 }
 
 int driver_get_touch_mode_common(int touch_id, int mode)
@@ -845,6 +880,20 @@ static void xiaomi_touch_set_mode(struct xiaomi_touch_panel_data *panel,
 		break;
 	}
 	mutex_unlock(&touch_mode_lock);
+
+	if (mode == Touch_Aod_Enable || mode == Touch_Doubletap_Mode) {
+		enum oneshot_sensor_type sensor_type =
+			(mode == Touch_Aod_Enable) ? ONESHOT_SENSOR_SINGLE_TAP :
+						     ONESHOT_SENSOR_DOUBLE_TAP;
+		int enable = !!values[0];
+
+		if (atomic_xchg(&oneshot_sensor_enabled_requested[sensor_type],
+				enable) != enable &&
+		    xiaomi_touch_device && xiaomi_touch_device->dev &&
+		    oneshot_sensor_map[sensor_type])
+			sysfs_notify(&xiaomi_touch_device->dev->kobj, NULL,
+				     oneshot_sensor_map[sensor_type]->enabled_name);
+	}
 
 	switch (mode) {
 	case Touch_Game_Mode:
@@ -3450,23 +3499,105 @@ int update_fod_press_status(int value)
 }
 EXPORT_SYMBOL_GPL(update_fod_press_status);
 #endif
-int notify_gesture_single_tap(void)
+int notify_oneshot_sensor(enum oneshot_sensor_type sensor_type, int value)
 {
-	mutex_lock(&xiaomi_touch_dev.gesture_single_tap_mutex);
-	if (!touch_pdata) {
-		mutex_unlock(&xiaomi_touch_dev.gesture_single_tap_mutex);
-		return -ENODEV;
+	struct oneshot_sensor *sensor;
+	int nonui;
+
+	if (sensor_type >= ONESHOT_SENSOR_TYPE_NUM ||
+	    !oneshot_sensor_map[sensor_type]) {
+		mi_ts_err("tried to notify for invalid oneshot sensor %d\n",
+			  sensor_type);
+		return -EINVAL;
 	}
-	sysfs_notify(&xiaomi_touch_dev.dev->kobj, NULL,
-		     "gesture_single_tap_state");
-	mutex_unlock(&xiaomi_touch_dev.gesture_single_tap_mutex);
+	if (!touch_pdata || !xiaomi_touch_dev.dev)
+		return -ENODEV;
+
+	mutex_lock(&touch_mode_lock);
+	nonui = touch_panel_data[0].registered ?
+		touch_panel_data[0].touch_mode[Touch_Nonui_Mode][GET_CUR_VALUE] : 0;
+	mutex_unlock(&touch_mode_lock);
+
+	if (nonui) {
+		mi_ts_info("gesture of type %d with value %d ignored due to nonui mode\n",
+			   sensor_type, value);
+		return 0;
+	}
+	if (!touch_pdata->suspend_state) {
+		mi_ts_info("gesture of type %d with value %d ignored because touchscreen is in resume state\n",
+			   sensor_type, value);
+		return 0;
+	}
+
+	sensor = oneshot_sensor_map[sensor_type];
+	mutex_lock(&sensor->mutex);
+	atomic_set(&sensor->pending_event, value);
+	sysfs_notify(&xiaomi_touch_dev.dev->kobj, NULL, sensor->status_name);
+	mutex_unlock(&sensor->mutex);
+
 	return 0;
 }
-EXPORT_SYMBOL_GPL(notify_gesture_single_tap);
-static ssize_t gesture_single_tap_value_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+EXPORT_SYMBOL_GPL(notify_oneshot_sensor);
+
+int notify_gesture_single_tap(void)
 {
-	return snprintf(buf, PAGE_SIZE, "%d\n", 1);
+	return notify_oneshot_sensor(ONESHOT_SENSOR_SINGLE_TAP, 1);
+}
+EXPORT_SYMBOL_GPL(notify_gesture_single_tap);
+
+static ssize_t oneshot_sensor_status_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	struct oneshot_sensor_attribute *sensor_attribute =
+		container_of(attr, struct oneshot_sensor_attribute, dev_attr);
+
+	/* Reading the status resets it to 0 */
+	return snprintf(buf, PAGE_SIZE, "%d\n",
+			atomic_cmpxchg(&oneshot_sensor_map[sensor_attribute->type]->pending_event,
+				       1, 0));
+}
+
+static ssize_t oneshot_sensor_enabled_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	struct oneshot_sensor_attribute *sensor_attribute =
+		container_of(attr, struct oneshot_sensor_attribute, dev_attr);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n",
+			atomic_read(&oneshot_sensor_enabled_requested[sensor_attribute->type]));
+}
+
+static ssize_t oneshot_sensor_enabled_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *arg, size_t count)
+{
+	struct oneshot_sensor_attribute *sensor_attribute =
+		container_of(attr, struct oneshot_sensor_attribute, dev_attr);
+	struct oneshot_sensor *sensor =
+		oneshot_sensor_map[sensor_attribute->type];
+	struct xiaomi_touch_panel_data *panel = &touch_panel_data[0];
+	unsigned int enable;
+
+	if (kstrtouint(arg, 10, &enable) || enable > 1)
+		return -EINVAL;
+
+	if (atomic_xchg(&oneshot_sensor_enabled_requested[sensor_attribute->type],
+			enable) != enable) {
+		mutex_lock(&touch_callback_lock);
+		if (panel->registered) {
+			mutex_lock(&touch_mode_lock);
+			panel->touch_mode[sensor->mode][SET_CUR_VALUE] = enable;
+			panel->touch_mode[sensor->mode][GET_CUR_VALUE] = enable;
+			mutex_unlock(&touch_mode_lock);
+			queue_work(panel->mode_wq, &panel->switch_work);
+		}
+		mutex_unlock(&touch_callback_lock);
+		sysfs_notify(&dev->kobj, NULL, attr->attr.name);
+	}
+
+	return count;
 }
 #ifdef	TOUCH_FOD_SUPPORT
 static ssize_t fod_press_status_show(struct device *dev,
@@ -3787,7 +3918,31 @@ static DEVICE_ATTR(update_rawdata, (0664), update_rawdata_show,
 #ifdef	TOUCH_FOD_SUPPORT
 static DEVICE_ATTR(fod_press_status, (S_IRUGO | S_IWUSR | S_IWGRP), fod_press_status_show, NULL);
 #endif
-static DEVICE_ATTR(gesture_single_tap_state, (S_IRUGO | S_IWUSR | S_IWGRP), gesture_single_tap_value_show, NULL);
+#define ONESHOT_SENSOR(_varname, _enabled, _status, _type, _mode)		\
+	struct oneshot_sensor _varname = {					\
+		.enabled_name = #_enabled,					\
+		.status_name = #_status,					\
+		.enabled_attr = { __ATTR(_enabled, 0644,			\
+					 oneshot_sensor_enabled_show,		\
+					 oneshot_sensor_enabled_store),		\
+				  _type },					\
+		.status_attr = { __ATTR(_status, 0444,				\
+					oneshot_sensor_status_show, NULL),	\
+				 _type },					\
+		.mode = _mode,							\
+		.pending_event = ATOMIC_INIT(0),				\
+		.mutex = __MUTEX_INITIALIZER(_varname.mutex),			\
+	}
+
+#define ONESHOT_SENSOR_ATTRS(_sensor)						\
+	&_sensor.enabled_attr.dev_attr.attr, &_sensor.status_attr.dev_attr.attr
+
+static ONESHOT_SENSOR(single_tap_sensor, gesture_single_tap_enabled,
+		      gesture_single_tap_state, ONESHOT_SENSOR_SINGLE_TAP,
+		      Touch_Aod_Enable);
+static ONESHOT_SENSOR(double_tap_sensor, gesture_double_tap_enabled,
+		      gesture_double_tap_state, ONESHOT_SENSOR_DOUBLE_TAP,
+		      Touch_Doubletap_Mode);
 static DEVICE_ATTR(touch_active_status, (S_IRUGO | S_IWUSR | S_IWGRP), touch_active_status_show, NULL);
 static DEVICE_ATTR(touch_irq_no, (S_IRUGO | S_IWUSR | S_IWGRP), touch_irq_no_show, NULL);
 static DEVICE_ATTR(touch_finger_status, (S_IRUGO | S_IWUSR | S_IWGRP), touch_finger_status_show, touch_finger_status_store);
@@ -3837,7 +3992,8 @@ static struct attribute *touch_attr_group[] = {
 #ifdef	TOUCH_FOD_SUPPORT
 	&dev_attr_fod_press_status.attr,
 #endif
-	&dev_attr_gesture_single_tap_state.attr,
+	ONESHOT_SENSOR_ATTRS(single_tap_sensor),
+	ONESHOT_SENSOR_ATTRS(double_tap_sensor),
 	&dev_attr_touch_active_status.attr,
 	&dev_attr_touch_irq_no.attr,
 	&dev_attr_touch_finger_status.attr,
@@ -4301,6 +4457,8 @@ EXPORT_SYMBOL_GPL(xiaomi_touch_mievent_report_str_common);
 
 static int __init xiaomi_touch_init(void)
 {
+	oneshot_sensor_map[ONESHOT_SENSOR_SINGLE_TAP] = &single_tap_sensor;
+	oneshot_sensor_map[ONESHOT_SENSOR_DOUBLE_TAP] = &double_tap_sensor;
 	return platform_driver_register(&xiaomi_touch_device_driver);
 }
 static void __exit xiaomi_touch_exit(void)

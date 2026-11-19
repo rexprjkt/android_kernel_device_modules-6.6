@@ -253,10 +253,16 @@ static void fts_switch_gesture(int gesture)
 			fts_data->nonui_status);
 		return;
 	}
-	if ((gesture & 1) && fts_data->suspended &&
-	    fts_data->poweroff_on_sleep && fts_data->fod_status == 1) {
+	if (gesture && fts_data->suspended && fts_data->poweroff_on_sleep) {
 		fts_recover_gesture_from_sleep(fts_data);
 		fts_data->poweroff_on_sleep = false;
+		fts_data->gesture_cmd_delay = false;
+		fts_gesture_suspend(fts_data);
+		if (gesture & 1) {
+			fts_fod_reg_write(2, true);
+			if (fts_data->fod_status == 1 || fts_data->fod_status == 2)
+				fts_fod_recovery();
+		}
 		if (fts_data->scp_registered && !fts_data->scp_mistouch_close)
 			xiaomi_touch_scp_switch(true, (gesture & 1) << 2 | (gesture >> 1 & 3));
 		return;

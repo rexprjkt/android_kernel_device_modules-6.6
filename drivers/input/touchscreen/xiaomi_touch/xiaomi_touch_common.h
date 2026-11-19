@@ -369,6 +369,12 @@ extern void add_input_event_timeline_before_event_time_common(int stage,
 int xiaomi_touch_set_suspend_state(int state);
 struct drm_panel *xiaomi_touch_check_panel(void);
 void add_common_data_to_buf(s8 touch_id, enum common_data_cmd cmd, enum common_data_mode mode, int length, int *data);
+enum oneshot_sensor_type {
+	ONESHOT_SENSOR_SINGLE_TAP,
+	ONESHOT_SENSOR_DOUBLE_TAP,
+	ONESHOT_SENSOR_TYPE_NUM,
+};
+int notify_oneshot_sensor(enum oneshot_sensor_type sensor_type, int value);
 extern int notify_gesture_single_tap(void);
 #ifdef	TOUCH_FOD_SUPPORT
 extern int update_fod_press_status(int value);

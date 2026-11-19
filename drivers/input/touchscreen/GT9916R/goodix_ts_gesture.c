@@ -288,12 +288,16 @@ static int gsx_gesture_ist(struct goodix_ts_core *cd,
 		}
 		goto out;
 	case 0xcc:
-		if (cd->gesture_enabled & 2)
+		if (cd->gesture_enabled & 2) {
 			key = KEY_WAKEUP;
+			notify_oneshot_sensor(ONESHOT_SENSOR_DOUBLE_TAP, 1);
+		}
 		break;
 	case 0x4c:
-		if (cd->gesture_enabled & 1)
+		if (cd->gesture_enabled & 1) {
 			key = KEY_GOTO;
+			notify_oneshot_sensor(ONESHOT_SENSOR_SINGLE_TAP, 1);
+		}
 		break;
 	}
 	if (key) {
