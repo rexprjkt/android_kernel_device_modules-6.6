@@ -1,8 +1,6 @@
-#include <linux/atomic.h>
 #include <linux/blkdev.h>
 #include <linux/init.h>
 #include <linux/delay.h>
-#include <linux/mutex.h>
 #include <linux/printk.h>
 #include <linux/spinlock.h>
 #include <linux/reboot.h>
@@ -24,8 +22,7 @@
 
 struct ChargerPartition {
 	struct scsi_device *sdev;
-    struct delayed_work charger_partition_work;
-	struct notifier_block reboot_notifier;
+        struct delayed_work charger_partition_work;
 
 	int part_info_part_number;
 	char *part_info_part_name;
@@ -34,8 +31,6 @@ struct ChargerPartition {
 };
 static struct ChargerPartition *charger_partition;
 static void* rw_buf;
-static DEFINE_MUTEX(charger_partition_lock);
-static atomic_t charger_power_off_mode = ATOMIC_INIT(1);
 
 typedef struct part {
 	sector_t part_start;
@@ -484,7 +479,7 @@ int get_charger_partition_info_1(void)
 int set_charger_partition_info_1(void)
 {
 	int ret = 0;
-	charger_partition_info_1 info_1 = {.power_off_mode = atomic_read(&charger_power_off_mode), .zero_speed_mode = 2, .test = 0x23456789, .reserved = 0};
+	charger_partition_info_1 info_1 = {.power_off_mode = 2, .zero_speed_mode = 2, .test = 0x23456789, .reserved = 0};
 
 	ret = charger_partition_alloc(CHARGER_PARTITION_HOST_KERNEL, CHARGER_PARTITION_INFO_1, sizeof(charger_partition_info_1));
 	if(ret < 0) {
@@ -513,15 +508,27 @@ int set_charger_partition_info_1(void)
 
 static void charger_partition_work(struct work_struct *work)
 {
-    int lun = 0;
+        int lun = 0;
 	static int retry;
-	charger_partition->part_info_part_number = 89;
+ #if 0
+	int ret = 0;
+	char HWC[16]={0};
 
-	mutex_lock(&charger_partition_lock);
-	if (charger_partition->is_charger_partition_rdy) {
-		set_charger_partition_info_1();
-		goto out;
+	//charger partition part number: cn: sdc84 global: sdc85
+	ret = get_hwc_from_dtb(HWC);
+	if (!ret) {
+		pr_err("[charger] %s get HWC success: %s\n", __func__, HWC);
+		if(!strncmp(HWC, "CN", 2))
+		{
+			pr_err("[charger] %s cn machine, set part_num 84\n", __func__);
+			charger_partition->part_info_part_number = 84;
+		}else {
+			pr_err("[charger] %s global machine, set part_num 85\n", __func__);
+			charger_partition->part_info_part_number = 85;
+		}
 	}
+#endif
+	charger_partition->part_info_part_number = 89;
 
 	//1. find charger partition
         for(lun = 0; lun < 6; lun++) {
@@ -534,7 +541,7 @@ static void charger_partition_work(struct work_struct *work)
 		/*check device is correct*/
 		if (!check_device_is_correct()){
                         pr_err("[charger] %s not find finally, won't read charger partition!!!\n", __func__);
-			goto out;
+			return;
                 }
 
 		if (get_charger_partition_info()) {
@@ -568,49 +575,23 @@ static void charger_partition_work(struct work_struct *work)
 			}
 		}
 	}
-out:
-	mutex_unlock(&charger_partition_lock);
-}
-
-static int charger_partition_reboot_notifier(struct notifier_block *nb,
-					     unsigned long action, void *data)
-{
-	u32 mode;
-
-	switch (action) {
-	case SYS_RESTART:
-		mode = 0;
-		break;
-	case SYS_POWER_OFF:
-	case SYS_HALT:
-		mode = 1;
-		break;
-	default:
-		return NOTIFY_DONE;
-	}
-
-	atomic_set(&charger_power_off_mode, mode);
-	cancel_delayed_work_sync(&charger_partition->charger_partition_work);
-	charger_partition_work(&charger_partition->charger_partition_work.work);
-
-	return NOTIFY_OK;
 }
 
 int charger_partition_init(void)
 {
 	charger_partition = (struct ChargerPartition *)kzalloc(sizeof(struct ChargerPartition), GFP_KERNEL);
 
+        // pr_err("[charger] %s ufs_xiaomi_comp wait...\n", __func__);
+        // wait_for_completion(&ufs_xiaomi_comp);
+        // pr_err("[charger] %s ufs_xiaomi_comp ready...\n", __func__);
+
 	INIT_DELAYED_WORK(&charger_partition->charger_partition_work, charger_partition_work);
-	charger_partition->reboot_notifier.notifier_call = charger_partition_reboot_notifier;
-	charger_partition->reboot_notifier.priority = 255;
-	register_reboot_notifier(&charger_partition->reboot_notifier);
 	schedule_delayed_work(&charger_partition->charger_partition_work, msecs_to_jiffies(CHARGER_WORK_DELAY_MS));
 	return 0;
 }
 void charger_partition_exit(void)
 {
-	unregister_reboot_notifier(&charger_partition->reboot_notifier);
-	cancel_delayed_work_sync(&charger_partition->charger_partition_work);
+	cancel_delayed_work(&charger_partition->charger_partition_work);
 	kfree(charger_partition);
 }
 

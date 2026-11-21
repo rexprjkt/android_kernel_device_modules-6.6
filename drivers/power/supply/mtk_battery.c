@@ -2903,6 +2903,74 @@ static int charger_partition_test_set(struct mtk_battery *gm,
 	return 0;
 }
 
+static int charger_partition_poweroffmode_get(struct mtk_battery *gm,
+	struct mtk_battery_sysfs_field_info *attr,
+	int *val)
+{
+	int ret = 0;
+	charger_partition_info_1 *info_1 = NULL;
+
+	ret = charger_partition_alloc(CHARGER_PARTITION_HOST_KERNEL, CHARGER_PARTITION_INFO_1, sizeof(charger_partition_info_1));
+	if(ret < 0) {
+		chr_err("[charger] %s failed to alloc\n", __func__);
+		return -1;
+	}
+
+	info_1 = (charger_partition_info_1 *)charger_partition_read(CHARGER_PARTITION_HOST_KERNEL, CHARGER_PARTITION_INFO_1, sizeof(charger_partition_info_1));
+	if(!info_1) {
+		chr_err("[charger] %s failed to read\n", __func__);
+		ret = charger_partition_dealloc(CHARGER_PARTITION_HOST_KERNEL, CHARGER_PARTITION_INFO_1, sizeof(charger_partition_info_1));
+		if(ret < 0) {
+			pr_err("[charger] %s failed to dealloc\n", __func__);
+			return -1;
+		}
+		return -1;
+	}
+	pr_err("[charger] %s ret: %d, info_1->power_off_mode: %u\n", __func__, ret, info_1->power_off_mode);
+	*val = info_1->power_off_mode;
+
+	ret = charger_partition_dealloc(CHARGER_PARTITION_HOST_KERNEL, CHARGER_PARTITION_INFO_1, sizeof(charger_partition_info_1));
+	if(ret < 0) {
+		chr_err("[charger] %s failed to dealloc\n", __func__);
+		return -1;
+	}
+	return 0;
+}
+
+static int charger_partition_poweroffmode_set(struct mtk_battery *gm,
+	struct mtk_battery_sysfs_field_info *attr,
+	int val)
+{
+	int ret = 0;
+	charger_partition_info_1 info_1 = {.power_off_mode = 2, .zero_speed_mode = 2, .test = 0x34567890, .reserved = 0};
+
+	ret = charger_partition_alloc(CHARGER_PARTITION_HOST_KERNEL, CHARGER_PARTITION_INFO_1, sizeof(charger_partition_info_1));
+	if(ret < 0) {
+		chr_err("[charger] %s failed to alloc\n", __func__);
+		return -1;
+	}
+
+	info_1.power_off_mode = val;
+	ret = charger_partition_write(CHARGER_PARTITION_HOST_KERNEL, CHARGER_PARTITION_INFO_1, (void *)&info_1, sizeof(charger_partition_info_1));
+	if(ret < 0) {
+		chr_err("[charger] %s failed to write\n", __func__);
+		ret = charger_partition_dealloc(CHARGER_PARTITION_HOST_KERNEL, CHARGER_PARTITION_INFO_1, sizeof(charger_partition_info_1));
+		if(ret < 0) {
+			pr_err("[charger] %s failed to dealloc\n", __func__);
+			return -1;
+		}
+		return -1;
+	}
+	pr_err("[charger] %s ret: %d, info_1.power_off_mode: %u, info_1.test: 0x%0x\n", __func__, ret, info_1.power_off_mode, info_1.test);
+
+	ret = charger_partition_dealloc(CHARGER_PARTITION_HOST_KERNEL, CHARGER_PARTITION_INFO_1, sizeof(charger_partition_info_1));
+	if(ret < 0) {
+		chr_err("[charger] %s failed to dealloc\n", __func__);
+		return -1;
+	}
+	return 0;
+}
+
 static int shipmode_count_reset_get(struct mtk_battery *gm,
 	struct mtk_battery_sysfs_field_info *attr,
 	int *val)
@@ -3383,6 +3451,7 @@ static struct mtk_battery_sysfs_field_info battery_sysfs_field_tbl[] = {
 	BAT_SYSFS_FIELD_RW(smart_batt, BAT_PROP_SMART_BATT),
 	BAT_SYSFS_FIELD_RW(smart_fv, BAT_PROP_SMART_FV),
 	BAT_SYSFS_FIELD_RW(charger_partition_test, USB_PROP_CHARGER_PARTITION_TEST),
+	BAT_SYSFS_FIELD_RW(charger_partition_poweroffmode, USB_PROP_CHARGER_PARTITION_POWEROFFMODE),
 	BAT_SYSFS_FIELD_RW(shipmode_count_reset, BAT_PROP_SHIPMODE),
 	BAT_SYSFS_FIELD_RW(smart_chg, BAT_PROP_SMART_CHG),
 	BAT_SYSFS_FIELD_RO(extreme_cold_chg, BAT_PROP_EXTREME_COLD_CHG),
